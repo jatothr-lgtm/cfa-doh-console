@@ -41,10 +41,18 @@ FG              = Σ Balance Qty  (FG rows)
 In Transit      = Σ Balance Qty  (In-Transit rows)
 
 Projection DRR  = Σ Total KGs ÷ calendar days in the projection month
-MTD DRR         = (Σ Pending Kgs + Σ Stock_qty) ÷ day-of-month of MAX(Sales_Order_Date)
+Pendency        = Σ Pending Kgs   over rows where Pending Kgs > 0
+Dispatched      = Σ Stock_qty    over rows where Pending Kgs = 0
+MTD DRR         = (Pendency + Dispatched) ÷ day-of-month of MAX(Sales_Order_Date)
 Final DRR       = MAX(Projection DRR, MTD DRR)
 DOH             = selected stock ÷ Final DRR
 ```
+
+Each dispatch row lands in **one** bucket, never both: a row with pending kilos left is pendency, a
+row with none is fully delivered so its `Stock_qty` is what actually went out. Counting both would
+double-count — in this feed `Stock_qty` equals `Pending Kgs` on every row that still has pending.
+Where a warehouse or SKU has no zero-pending row at all, Dispatched is **nil** (shown as "—", and
+left as an empty cell in the export), not a computed zero.
 
 The MTD divisor is taken from the **whole dispatch column** before the CFA/SKU filters, so every
 warehouse divides by the same day — matching the worked example in the Condition tab
@@ -115,7 +123,9 @@ re-compute in Excel.
 | In Transit | 30,282.58 | 34,065.76 |
 | IT + FG | 90,750.91 | 90,908.58 |
 | Projection DRR | 3,970.16 | 4,112.81 |
-| MTD DRR (÷14) | 2,731.90 | 3,484.87 |
+| Pendency | 18,544.09 | 24,034.34 |
+| Dispatched (zero-pending rows) | 1,158.37 | 719.55 |
+| MTD DRR (÷14) | 1,407.32 | 1,768.14 |
 | DOH — IT+FG | 22.86 | 22.10 |
 | DOH — FG | 15.23 | 13.82 |
 | DOH — In Transit | 7.63 | 8.28 |
@@ -126,5 +136,5 @@ Cross-checked against an independent Python computation over the same workbook.
 
 - All quantity columns are kilograms; no conversion factor applied.
 - Projection `Origin` is the producing plant and is ignored — the CFA there is `Wareouse`.
-- No dispatch-status filter: `Stock_qty` is the dispatched quantity as Condition 6 specifies.
+- No filter on `Dispatch_Status`; the zero-pending test is what separates delivered from outstanding, per row rather than per order.
 - Dispatch rows outside the max date's month are excluded (toggleable on the Data tab).

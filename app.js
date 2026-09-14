@@ -105,6 +105,7 @@ const ALIASES = {
   dispatch:   {wh:["Origin"], code:["Item_Code","Item Code","item_code"], name:["Item_Name","Item Name","item_name"], pend:["Pending Kgs"], disp:["Stock_qty"], date:["Sales_Order_Date"]}
 };
 const DS_LABEL = {inhand:"In Hand", projection:"Projection", dispatch:"Dispatches + Pendencies"};
+const PEND_EPS = 1e-6;   // a float artefact must not hide a delivered line
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
 
 /* ── state ─────────────────────────────────────────────────── */
@@ -241,7 +242,7 @@ function compute(){
   const mIn = mapFor("inhand"), mPr = mapFor("projection"), mDi = mapFor("dispatch");
 
   const cfas = [...new Set(state.wh.filter(w => w.active).map(w => w.cfa))].sort();
-  const blank = () => ({fg:0, it:0, both:0, projKgs:0, pend:0, disp:0});
+  const blank = () => ({fg:0, it:0, both:0, projKgs:0, pend:0, disp:0, dispRows:0});
   const W = new Map(cfas.map(c => [c, {cfa:c, ...blank(), skus:new Map()}]));
   const rowFor = (cfa, code, name) => {
     const w = W.get(cfa); if (!w) return null;
@@ -330,15 +331,24 @@ function compute(){
   for (const x of dispRows){
     if (limitMonth && maxDate && x.d && (x.d.getMonth() !== maxDate.getMonth() || x.d.getFullYear() !== maxDate.getFullYear())){ outOfMonth++; continue; }
     const bucket = W.get(x.w.cfa); if (!bucket) continue;
-    bucket.pend += x.pend; bucket.disp += x.disp;
     const sku = rowFor(x.w.cfa, x.code, x.name);
-    sku.pend += x.pend; sku.disp += x.disp;
+    // Each row lands in exactly one bucket. A row with pending kilos is Pending;
+    // a row with none is fully delivered, so its Stock_qty is the Dispatched figure.
+    // Counting both would double-count: in this feed Stock_qty equals Pending Kgs
+    // on every row that still has pending.
+    if (x.pend > PEND_EPS){
+      bucket.pend += x.pend; sku.pend += x.pend;
+    } else {
+      bucket.disp += x.disp; sku.disp += x.disp;
+      bucket.dispRows++;     sku.dispRows++;
+    }
     diag.kept.dispatch++;
   }
 
   /* Conditions 7 & 8 — final DRR and DOH */
   const finish = o => {
     o.projDRR = o.projKgs / projDays;
+    o.dispNil = o.dispRows === 0;   // no zero-pending row here at all — nil, not a zero
     o.pdSum   = o.pend + o.disp;
     o.mtdDRR  = o.pdSum / mtdDays;
     o.finalDRR = Math.max(o.projDRR, o.mtdDRR);
@@ -399,7 +409,7 @@ const WH_COLS = [
   ["Projection Kgs", w => fmt(w.projKgs)],
   ["Projection DRR", w => fmt(w.projDRR)],
   ["Pending Kgs", w => fmt(w.pend)],
-  ["Dispatched Kgs", w => fmt(w.disp)],
+  ["Dispatched Kgs", w => w.dispNil ? "—" : fmt(w.disp)],
   ["Pend + Disp", w => fmt(w.pdSum)],
   ["MTD DRR", w => fmt(w.mtdDRR)],
   ["Final DRR", w => `<b>${fmt(w.finalDRR)}</b>`],
@@ -440,7 +450,7 @@ function renderSkuTable(r){
         <td>${esc(s.code)}</td><td class="name">${esc(s.name)}</td>
         <td>${fmt(s.both)}</td><td>${fmt(s.fg)}</td><td>${fmt(s.it)}</td>
         <td>${fmt(s.projKgs)}</td><td>${fmt(s.projDRR)}</td>
-        <td>${fmt(s.pend)}</td><td>${fmt(s.disp)}</td><td>${fmt(s.pdSum)}</td><td>${fmt(s.mtdDRR)}</td>
+        <td>${fmt(s.pend)}</td><td>${s.dispNil ? "—" : fmt(s.disp)}</td><td>${fmt(s.pdSum)}</td><td>${fmt(s.mtdDRR)}</td>
         <td><b>${fmt(s.finalDRR)}</b></td><td>${fmt(s.sel)}</td>
         <td><span class="doh ${bandOf(s.doh)}">${s.doh==null?"—":fmt(s.doh,1)}</span></td></tr>`;
     }
@@ -529,9 +539,10 @@ In Transit      = Σ Balance Qty where stock type = In Transit</div>
 
   <h3>Condition 6 — Pendency + dispatch MTD DRR</h3>
   <p>From the <em>Dispatches plus pendencies</em> file, grouped by normalised <code>Origin</code>:</p>
-  <div class="formula">Pendency   = Σ Pending Kgs
-Dispatched = Σ Stock_qty
+  <div class="formula">Pendency   = Σ Pending Kgs   over rows where Pending Kgs &gt; 0
+Dispatched = Σ Stock_qty    over rows where Pending Kgs = 0
 MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
+  <p>Each row falls into <strong>one</strong> of the two, never both. A row that still has pending kilos counts as pendency; a row with none is fully delivered, so its <code>Stock_qty</code> is what actually went out. Counting both would double-count — in this feed <code>Stock_qty</code> equals <code>Pending Kgs</code> on every row that still has pending. Where a warehouse has no zero-pending row at all, Dispatched is <strong>nil</strong> and shows as “—”, not as a computed zero.</p>
   <p>The divisor is the <strong>day-of-month of the maximum <code>Sales_Order_Date</code></strong> in the file${r && r.maxDate ? ` — ${ymd(r.maxDate)}, so ${r.autoMtdDays}${r.ovMtd ? `, manually overridden to ${r.ovMtd}` : ""}` : ""}. Dates arriving as text and as real dates are both parsed. No dispatch-status filter is applied: <code>Stock_qty</code> is taken as dispatched exactly as the Condition tab specifies.</p>
 
   <h3>Condition 7 — Final DRR</h3>
@@ -604,7 +615,7 @@ async function exportExcel(){
     const firstData = rr;
     for (const w of r.warehouses){
       const x = rr;
-      ws.getRow(x).values = [w.cfa, w.both, w.fg, w.it, w.projKgs, r.projDays, null, w.pend, w.disp, null, r.mtdDays, null, null, null, BASIS_LABEL[state.basis], null, null];
+      ws.getRow(x).values = [w.cfa, w.both, w.fg, w.it, w.projKgs, r.projDays, null, w.pend, w.dispNil ? null : w.disp, null, r.mtdDays, null, null, null, BASIS_LABEL[state.basis], null, null];
       ws.getCell(`G${x}`).value = {formula:`IFERROR(E${x}/F${x},0)`};
       ws.getCell(`J${x}`).value = {formula:`H${x}+I${x}`};
       ws.getCell(`L${x}`).value = {formula:`IFERROR(J${x}/K${x},0)`};
@@ -653,7 +664,7 @@ async function exportExcel(){
     let dr = 2;
     for (const w of r.warehouses) for (const s of w.skuRows){
       const x = dr;
-      ds.getRow(x).values = [w.cfa, s.code, s.name, s.both, s.fg, s.it, s.projKgs, r.projDays, null, s.pend, s.disp, null, r.mtdDays, null, null, null, null, null];
+      ds.getRow(x).values = [w.cfa, s.code, s.name, s.both, s.fg, s.it, s.projKgs, r.projDays, null, s.pend, s.dispNil ? null : s.disp, null, r.mtdDays, null, null, null, null, null];
       ds.getCell(`I${x}`).value = {formula:`IFERROR(G${x}/H${x},0)`};
       ds.getCell(`L${x}`).value = {formula:`J${x}+K${x}`};
       ds.getCell(`N${x}`).value = {formula:`IFERROR(L${x}/M${x},0)`};
@@ -716,13 +727,17 @@ async function exportExcel(){
     gap();
 
     sec("Condition 6 — pendency + dispatch MTD DRR");
-    kv("Formula", "MTD DRR = (Σ Pending Kgs + Σ Stock_qty) ÷ day-of-month of MAX(Sales_Order_Date)", true);
+    kv("Formula", ["Pendency   = Σ Pending Kgs  over rows where Pending Kgs > 0",
+                   "Dispatched = Σ Stock_qty   over rows where Pending Kgs = 0",
+                   "MTD DRR    = (Pendency + Dispatched) ÷ day-of-month of MAX(Sales_Order_Date)"].join("\n"), true);
+    kv("One bucket per row", "A row counts as EITHER pendency OR dispatched, never both. A row with pending kilos left is pendency; a row with none is fully delivered, so its Stock_qty is the dispatched figure. Counting both would double-count — in this feed Stock_qty equals Pending Kgs on every row that still has pending.");
+    kv("Nil vs zero", "Where a warehouse (or SKU) has no zero-pending row at all, the Dispatched cell is left EMPTY — nil, not a computed zero. Column J still adds correctly across an empty cell.");
     kv("Excel cells", "Warehouse DOH!J = H+I  (Pend + Disp)\nWarehouse DOH!L = IFERROR(J/K, 0)  (÷ MTD Days)", true);
     kv("Divisor used", `${r.mtdDays} day(s)${r.maxDate ? ` — max Sales_Order_Date ${ymd(r.maxDate)}` : ""}${r.ovMtd ? " (manual override)" : ""}`);
     kv("Row scope", r.limitMonth
       ? `Dispatch rows are limited to the month of the max date; ${fmt0(r.outOfMonth)} row(s) fell outside and were excluded.`
       : "All dispatch rows are included regardless of month.");
-    kv("Status filter", "None. Stock_qty is taken as the dispatched quantity exactly as Condition 6 specifies, including rows whose dispatch status is Pending.");
+    kv("Status filter", "None on Dispatch_Status itself. The zero-pending test is what separates delivered from outstanding, and it does so per row rather than per order.");
     gap();
 
     sec("Condition 7 — final DRR");
