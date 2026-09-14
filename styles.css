@@ -278,3 +278,24 @@ table.grid{border-collapse:separate; border-spacing:0; width:100%; font-variant-
   .barrow,.barlist.has-wh .barrow{grid-template-columns:150px 1fr 46px}
   .b-wh,.b-note{display:none}
 }
+
+/* ── multi-select basis toggle ── */
+.seg.multi .seg-btn{position:relative; padding-left:28px}
+.seg.multi .seg-btn::before{
+  content:""; position:absolute; left:9px; top:50%; transform:translateY(-50%);
+  width:13px; height:13px; border:1.5px solid var(--ink-3); border-radius:4px; background:var(--surface);
+}
+.seg.multi .seg-btn.is-on::before{
+  background:var(--brand); border-color:var(--brand);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.2 2.2 4.8-4.8' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size:12px 12px; background-position:center; background-repeat:no-repeat;
+}
+.hint-inline{color:var(--ink-3); font-size:11.5px}
+
+/* KPI card with one row per selected basis */
+.kpi-rows{margin:8px 0 6px; display:flex; flex-direction:column; gap:5px}
+.kpi-row{display:grid; grid-template-columns:1fr auto auto; align-items:baseline; gap:10px}
+.kr-lab{font-size:12.5px; color:var(--ink-2)}
+.kr-val{font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+.kr-val.red{color:var(--red)} .kr-val.amber{color:var(--amber)} .kr-val.green{color:var(--green)}
+.kr-sub{font-size:11.5px; color:var(--ink-3); font-variant-numeric:tabular-nums; min-width:62px; text-align:right}

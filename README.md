@@ -39,7 +39,10 @@ git config user.email "jatoth.r@farmley.com"
 1. **Data** tab → load the three files (click or drag). Headers are validated on load; a file that looks like a different dataset is flagged.
 2. **Dashboard** → KPI per CFA, warehouse summary, SKU drilldown, diagnostics.
 3. **Visualisation** → every critical SKU, plus six charts of the whole analysis.
-4. The **In Transit + FG / FG only / In Transit only** toggle re-computes DOH instantly.
+4. The **In Transit + FG / FG only / In Transit only** control is multi-select: tick as many as you
+   want and the dashboard grows one DOH column per basis, so you can read them side by side. At
+   least one must stay ticked. The Visualisation tab has its own single **Chart basis** — a chart
+   plots one number per mark, so it picks one.
 5. **Export Excel** → a workbook where every derived number is a live formula.
 
 ## Calculation (Conditions 4–8)
@@ -115,7 +118,7 @@ Exclusions sheet of the export — never silently dropped.
 
 | Sheet | Contents |
 |---|---|
-| Warehouse DOH | one row per CFA; columns G, J, L, M, N, P, Q are live formulas over the raw sums; conditional formatting on DOH; totals row |
+| Warehouse DOH | one row per CFA; every derived column is a live formula over the raw sums; one DOH column per selected basis, each conditionally formatted; totals row |
 | SKU Drilldown | the same formulas per SKU, auto-filtered |
 | Logic & Conditions | every condition, its formula, the divisors actually used, the assumptions, and which Excel cell implements what |
 | Exclusions | unmapped labels with row counts, plus rows-used / rows-dropped per dataset |

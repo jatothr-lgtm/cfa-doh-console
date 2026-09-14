@@ -34,11 +34,12 @@
 <section class="view is-active" id="view-dashboard">
 
   <div class="toolbar">
-    <div class="seg" id="basisToggle" role="group" aria-label="Stock basis">
-      <button class="seg-btn is-on" data-basis="both">In Transit + FG</button>
-      <button class="seg-btn" data-basis="fg">FG only</button>
-      <button class="seg-btn" data-basis="it">In Transit only</button>
+    <div class="seg multi" id="basisToggle" role="group" aria-label="Stock basis — choose one or more">
+      <button class="seg-btn is-on" data-basis="both" aria-pressed="true">In Transit + FG</button>
+      <button class="seg-btn" data-basis="fg" aria-pressed="false">FG only</button>
+      <button class="seg-btn" data-basis="it" aria-pressed="false">In Transit only</button>
     </div>
+    <span class="mini hint-inline">pick one or more</span>
     <div class="spacer"></div>
     <label class="mini">Red at DOH ≤ <input type="number" id="thRed" value="15" min="0" step="1"></label>
     <label class="mini">Amber ≤ <input type="number" id="thAmber" value="30" min="0" step="1"></label>
@@ -145,7 +146,8 @@
     <label class="mini">Warehouse
       <select id="vizWh"></select>
     </label>
-    <div class="seg" id="vizBasis" role="group" aria-label="Stock basis">
+    <label class="mini" for="vizBasis">Chart basis</label>
+    <div class="seg" id="vizBasis" role="group" aria-label="Chart stock basis">
       <button class="seg-btn is-on" data-basis="both">In Transit + FG</button>
       <button class="seg-btn" data-basis="fg">FG only</button>
       <button class="seg-btn" data-basis="it">In Transit only</button>

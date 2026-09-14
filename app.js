@@ -105,6 +105,14 @@ const ALIASES = {
   dispatch:   {wh:["Origin"], code:["Item_Code","Item Code","item_code"], name:["Item_Name","Item Name","item_name"], pend:["Pending Kgs"], disp:["Stock_qty"], date:["Sales_Order_Date"]}
 };
 const DS_LABEL = {inhand:"In Hand", projection:"Projection", dispatch:"Dispatches + Pendencies"};
+const BASES = ["both", "fg", "it"];
+const BASIS_LABEL = {both:"In Transit + FG", fg:"FG only", it:"In Transit only"};
+const selOf = (o, b) => b === "both" ? o.both : b === "fg" ? o.fg : o.it;
+const dohOf = (o, b) => o.finalDRR > 0 ? selOf(o, b) / o.finalDRR : null;
+/* the bases the dashboard is showing, in fixed order — never the click order */
+const activeBases = () => BASES.filter(b => state.bases.includes(b));
+const primaryBasis = () => activeBases()[0] || "both";
+
 const PEND_EPS = 1e-6;   // a float artefact must not hide a delivered line
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
 
@@ -112,7 +120,7 @@ const MONTHS = ["january","february","march","april","may","june","july","august
 const LS = "cfa_doh_v1";
 let state = {
   skus: null, wh: null,
-  basis: "both", thRed: 15, thAmber: 30,
+  bases: ["both"], vizBasis: "both", thRed: 15, thAmber: 30,
   files: {inhand:null, projection:null, dispatch:null},
   result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL"
 };
@@ -124,7 +132,11 @@ function loadMasters(){
     state.wh   = Array.isArray(s.wh)   && s.wh.length   ? s.wh   : structuredClone(SEED_WH);
     if (s.thRed != null) state.thRed = s.thRed;
     if (s.thAmber != null) state.thAmber = s.thAmber;
-    if (s.basis) state.basis = s.basis;
+    // migrate the old single-basis setting
+    if (Array.isArray(s.bases) && s.bases.length) state.bases = s.bases.filter(b => BASES.includes(b));
+    else if (s.basis) state.bases = [s.basis];
+    if (!state.bases.length) state.bases = ["both"];
+    state.vizBasis = BASES.includes(s.vizBasis) ? s.vizBasis : state.bases[0];
   }catch(e){
     state.skus = structuredClone(SEED_SKUS);
     state.wh   = structuredClone(SEED_WH);
@@ -133,7 +145,8 @@ function loadMasters(){
 function saveMasters(){
   try{
     localStorage.setItem(LS, JSON.stringify({
-      skus:state.skus, wh:state.wh, thRed:state.thRed, thAmber:state.thAmber, basis:state.basis
+      skus:state.skus, wh:state.wh, thRed:state.thRed, thAmber:state.thAmber,
+      bases:state.bases, vizBasis:state.vizBasis
     }));
   }catch(e){ /* private window — masters stay in memory for this session */ }
 }
@@ -353,8 +366,8 @@ function compute(){
     o.mtdDRR  = o.pdSum / mtdDays;
     o.finalDRR = Math.max(o.projDRR, o.mtdDRR);
     o.drrSrc  = o.finalDRR === 0 ? "—" : (o.projDRR >= o.mtdDRR ? "Projection" : "MTD");
-    o.sel     = state.basis === "both" ? o.both : state.basis === "fg" ? o.fg : o.it;
-    o.doh     = o.finalDRR > 0 ? o.sel / o.finalDRR : null;
+    o.sel     = selOf(o, state.vizBasis);      // basis used by the charts
+    o.doh     = dohOf(o, state.vizBasis);
     return o;
   };
   const warehouses = cfas.map(c => {
@@ -372,7 +385,6 @@ function compute(){
 }
 
 /* ── rendering ─────────────────────────────────────────────── */
-const BASIS_LABEL = {both:"In Transit + FG", fg:"FG only", it:"In Transit only"};
 
 function render(){
   const r = state.result;
@@ -383,25 +395,35 @@ function render(){
   if (!r) return;
   renderKpis(r); renderWhTable(r); renderWhFilter(r); renderSkuTable(r); renderDiag(r);
   $("#paramNote").textContent =
-    `Basis: ${BASIS_LABEL[state.basis]} · Projection divisor ${r.projDays} day(s) (${r.projMonthLabel}${r.ovProj?", manual override":""}) · ` +
+    `Basis: ${activeBases().map(b => BASIS_LABEL[b]).join(" · ")} · Projection divisor ${r.projDays} day(s) (${r.projMonthLabel}${r.ovProj?", manual override":""}) · ` +
     `MTD divisor ${r.mtdDays} day(s)${r.maxDate?` (max Sales_Order_Date ${ymd(r.maxDate)})`:""}${r.ovMtd?", manual override":""} · ` +
     `${r.activeSkus} active CFA SKUs.`;
 }
 
 function renderKpis(r){
-  $("#kpis").innerHTML = r.warehouses.map(w => `
-    <div class="kpi ${bandOf(w.doh)}">
-      <h3>${esc(w.cfa)}</h3>
-      <div class="val">${w.doh == null ? "—" : fmt(w.doh,1)}<span style="font-size:15px;font-weight:600;color:var(--ink-2)"> days</span></div>
-      <div class="meta">
-        <span>Stock <b>${fmt0(w.sel)}</b> kg</span>
-        <span>DRR <b>${fmt(w.finalDRR)}</b> kg/day</span>
-        <span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span>
-      </div>
-    </div>`).join("");
+  const bases = activeBases();
+  $("#kpis").innerHTML = r.warehouses.map(w => {
+    const vals = bases.map(b => ({b, doh: dohOf(w, b), sel: selOf(w, b)}));
+    const worst = vals.reduce((a, v) => a == null || (v.doh ?? 1e9) < (a.doh ?? 1e9) ? v : a, null);
+    const head = bases.length === 1
+      ? `<div class="val">${worst.doh == null ? "—" : fmt(worst.doh, 1)}<span style="font-size:15px;font-weight:600;color:var(--ink-2)"> days</span></div>
+         <div class="meta">
+           <span>Stock <b>${fmt0(worst.sel)}</b> kg</span>
+           <span>DRR <b>${fmt(w.finalDRR)}</b> kg/day</span>
+           <span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span>
+         </div>`
+      : `<div class="kpi-rows">${vals.map(v => `<div class="kpi-row">
+             <span class="kr-lab">${esc(BASIS_LABEL[v.b])}</span>
+             <span class="kr-val ${bandOf(v.doh)}">${v.doh == null ? "—" : fmt(v.doh, 1)}</span>
+             <span class="kr-sub">${fmt0(v.sel)} kg</span>
+           </div>`).join("")}</div>
+         <div class="meta"><span>DRR <b>${fmt(w.finalDRR)}</b> kg/day</span>
+           <span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span></div>`;
+    return `<div class="kpi ${bandOf(worst.doh)}"><h3>${esc(w.cfa)}</h3>${head}</div>`;
+  }).join("");
 }
 
-const WH_COLS = [
+const WH_COLS_BASE = [
   ["Warehouse", w => esc(w.cfa), "left"],
   ["In Transit + FG", w => fmt(w.both)],
   ["FG", w => fmt(w.fg)],
@@ -413,15 +435,27 @@ const WH_COLS = [
   ["Pend + Disp", w => fmt(w.pdSum)],
   ["MTD DRR", w => fmt(w.mtdDRR)],
   ["Final DRR", w => `<b>${fmt(w.finalDRR)}</b>`],
-  ["DRR source", w => `<span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span>`],
-  ["Selected stock", w => fmt(w.sel)],
-  ["DOH", w => `<span class="doh ${bandOf(w.doh)}">${w.doh==null?"—":fmt(w.doh,1)}</span>`]
+  ["DRR source", w => `<span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span>`]
 ];
+/* one DOH column per selected basis; the single-basis case keeps its stock column */
+function whCols(){
+  const bases = activeBases(), cols = WH_COLS_BASE.slice();
+  if (bases.length === 1){
+    const b = bases[0];
+    cols.push(["Selected stock", w => fmt(selOf(w, b))]);
+    cols.push(["DOH", w => { const d = dohOf(w, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; }]);
+  } else {
+    bases.forEach(b => cols.push([`DOH · ${BASIS_LABEL[b]}`,
+      w => { const d = dohOf(w, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; }]));
+  }
+  return cols;
+}
 
 function renderWhTable(r){
-  const head = `<thead><tr>${WH_COLS.map(c => `<th${c[2]?' style="text-align:left"':''}>${c[0]}</th>`).join("")}</tr></thead>`;
+  const COLS = whCols();
+  const head = `<thead><tr>${COLS.map(c => `<th${c[2]?' style="text-align:left"':''}>${c[0]}</th>`).join("")}</tr></thead>`;
   const body = `<tbody>${r.warehouses.map(w =>
-    `<tr>${WH_COLS.map(c => `<td${c[2]?' style="text-align:left"':''}>${c[1](w)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+    `<tr>${COLS.map(c => `<td${c[2]?' style="text-align:left"':''}>${c[1](w)}</td>`).join("")}</tr>`).join("")}</tbody>`;
   $("#whTable").innerHTML = head + body;
 }
 
@@ -436,7 +470,9 @@ function renderWhFilter(r){
 
 function renderSkuTable(r){
   const q = norm(state.skuQuery);
-  const cols = ["Item Code","Item Name","IT + FG","FG","In Transit","Proj Kgs","Proj DRR","Pending","Dispatched","Pend + Disp","MTD DRR","Final DRR","Selected","DOH"];
+  const bases = activeBases();
+  const cols = ["Item Code","Item Name","IT + FG","FG","In Transit","Proj Kgs","Proj DRR","Pending","Dispatched","Pend + Disp","MTD DRR","Final DRR"]
+    .concat(bases.length === 1 ? ["Selected","DOH"] : bases.map(b => `DOH · ${BASIS_LABEL[b]}`));
   let html = `<thead><tr>${cols.map((c,i) => `<th${i<2?' style="text-align:left"':''}>${c}</th>`).join("")}</tr></thead><tbody>`;
   let n = 0;
   for (const w of r.warehouses){
@@ -451,8 +487,10 @@ function renderSkuTable(r){
         <td>${fmt(s.both)}</td><td>${fmt(s.fg)}</td><td>${fmt(s.it)}</td>
         <td>${fmt(s.projKgs)}</td><td>${fmt(s.projDRR)}</td>
         <td>${fmt(s.pend)}</td><td>${s.dispNil ? "—" : fmt(s.disp)}</td><td>${fmt(s.pdSum)}</td><td>${fmt(s.mtdDRR)}</td>
-        <td><b>${fmt(s.finalDRR)}</b></td><td>${fmt(s.sel)}</td>
-        <td><span class="doh ${bandOf(s.doh)}">${s.doh==null?"—":fmt(s.doh,1)}</span></td></tr>`;
+        <td><b>${fmt(s.finalDRR)}</b></td>
+        ${bases.length === 1 ? `<td>${fmt(selOf(s, bases[0]))}</td>` : ""}
+        ${bases.map(b => { const d = dohOf(s, b);
+          return `<td><span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span></td>`; }).join("")}</tr>`;
     }
   }
   if (!n) html += `<tr><td colspan="${cols.length}" style="text-align:center;color:var(--ink-3);padding:24px">No matching SKUs</td></tr>`;
@@ -579,6 +617,7 @@ async function exportExcel(){
     wb.created = new Date();
 
     const BRAND = "FF17603F", HEADFILL = "FFEFF3F0";
+    const COL = i => String.fromCharCode(65 + i);   // 0 -> A
     const headerRow = (ws, rowIdx) => {
       const row = ws.getRow(rowIdx);
       row.font = {bold:true, color:{argb:"FFFFFFFF"}, size:10};
@@ -593,7 +632,7 @@ async function exportExcel(){
     ws.mergeCells("A1:Q1");
     ws.getCell("A1").value = "CFA Warehouse-wise Days on Hand";
     ws.getCell("A1").font = {bold:true, size:15, color:{argb:BRAND}};
-    ws.getCell("A3").value = "Stock basis";           ws.getCell("B3").value = BASIS_LABEL[state.basis];
+    ws.getCell("A3").value = "Stock basis";           ws.getCell("B3").value = activeBases().map(b => BASIS_LABEL[b]).join(" · ");
     ws.getCell("D3").value = "Projection divisor";    ws.getCell("E3").value = r.projDays;
     ws.getCell("F3").value = `(${r.projMonthLabel}${r.ovProj ? ", manual" : ", calendar days"})`;
     ws.getCell("H3").value = "MTD divisor";           ws.getCell("I3").value = r.mtdDays;
@@ -603,29 +642,46 @@ async function exportExcel(){
     ["B3","E3","I3","M3"].forEach(c => ws.getCell(c).font = {bold:true, size:10, color:{argb:BRAND}});
     ["F3","J3"].forEach(c => ws.getCell(c).font = {size:9, italic:true, color:{argb:"FF7A857F"}});
 
+    const bases = activeBases();
+    const stockCol = {both:"B", fg:"C", it:"D"};
+    // O onwards: one DOH column per selected basis. A single basis keeps the
+    // Stock Basis / Selected Stock pair it has always had.
     const HEAD = ["Warehouse","In Transit + FG (kg)","FG (kg)","In Transit (kg)","Projection Kgs","Projection Days",
                   "Projection DRR","Pending Kgs","Dispatched Kgs","Pend + Disp","MTD Days","MTD DRR","Final DRR",
-                  "DRR Source","Stock Basis","Selected Stock","DOH (days)"];
+                  "DRR Source"].concat(
+                  bases.length === 1 ? ["Stock Basis","Selected Stock","DOH (days)"]
+                                     : bases.map(b => `DOH (days) — ${BASIS_LABEL[b]}`));
     ws.getRow(5).values = HEAD; headerRow(ws, 5);
     ws.columns = [{width:18},{width:17},{width:13},{width:13},{width:14},{width:13},{width:14},{width:13},{width:15},
-                  {width:13},{width:11},{width:12},{width:12},{width:12},{width:16},{width:15},{width:12}];
+                  {width:13},{width:11},{width:12},{width:12},{width:12}].concat(
+                  bases.length === 1 ? [{width:16},{width:15},{width:12}] : bases.map(() => ({width:22})));
 
-    const basisCol = state.basis === "both" ? "B" : state.basis === "fg" ? "C" : "D";
+    const dohCols = bases.length === 1 ? ["Q"] : bases.map((_, i) => COL(14 + i));
     let rr = 6;
     const firstData = rr;
     for (const w of r.warehouses){
       const x = rr;
-      ws.getRow(x).values = [w.cfa, w.both, w.fg, w.it, w.projKgs, r.projDays, null, w.pend, w.dispNil ? null : w.disp, null, r.mtdDays, null, null, null, BASIS_LABEL[state.basis], null, null];
+      ws.getRow(x).values = [w.cfa, w.both, w.fg, w.it, w.projKgs, r.projDays, null, w.pend,
+                             w.dispNil ? null : w.disp, null, r.mtdDays, null, null, null];
       ws.getCell(`G${x}`).value = {formula:`IFERROR(E${x}/F${x},0)`};
       ws.getCell(`J${x}`).value = {formula:`H${x}+I${x}`};
       ws.getCell(`L${x}`).value = {formula:`IFERROR(J${x}/K${x},0)`};
       ws.getCell(`M${x}`).value = {formula:`MAX(G${x},L${x})`};
       ws.getCell(`N${x}`).value = {formula:`IF(M${x}=0,"-",IF(G${x}>=L${x},"Projection","MTD"))`};
-      ws.getCell(`P${x}`).value = {formula:`${basisCol}${x}`};
-      ws.getCell(`Q${x}`).value = {formula:`IF(M${x}=0,"-",P${x}/M${x})`};
-      ["B","C","D","E","G","H","I","J","L","M","P","Q"].forEach(c => ws.getCell(`${c}${x}`).numFmt = N);
+      if (bases.length === 1){
+        ws.getCell(`O${x}`).value = BASIS_LABEL[bases[0]];
+        ws.getCell(`P${x}`).value = {formula:`${stockCol[bases[0]]}${x}`};
+        ws.getCell(`Q${x}`).value = {formula:`IF($M${x}=0,"-",P${x}/$M${x})`};
+        ws.getCell(`P${x}`).numFmt = N;
+      } else {
+        bases.forEach((b, i) => {
+          const c = COL(14 + i);
+          ws.getCell(`${c}${x}`).value = {formula:`IF($M${x}=0,"-",${stockCol[b]}${x}/$M${x})`};
+        });
+      }
+      ["B","C","D","E","G","H","I","J","L","M"].concat(dohCols).forEach(c => ws.getCell(`${c}${x}`).numFmt = N);
       ws.getCell(`A${x}`).font = {bold:true};
-      ws.getCell(`Q${x}`).font = {bold:true};
+      dohCols.forEach(c => ws.getCell(`${c}${x}`).font = {bold:true});
       rr++;
     }
     const lastData = rr - 1;
@@ -639,51 +695,51 @@ async function exportExcel(){
     });
     ws.getRow(tot).border = {top:{style:"thin", color:{argb:BRAND}}};
 
-    ws.addConditionalFormatting({
-      ref:`Q${firstData}:Q${lastData}`,
-      rules:[
-        {type:"cellIs", operator:"lessThanOrEqual", formulae:[String(state.thRed)],  priority:1,
-         style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFFDECEA"}}, font:{color:{argb:"FFC0392F"},bold:true}}},
-        {type:"cellIs", operator:"lessThanOrEqual", formulae:[String(state.thAmber)], priority:2,
-         style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFFDF3E2"}}, font:{color:{argb:"FFB8791A"},bold:true}}},
-        {type:"cellIs", operator:"greaterThan", formulae:[String(state.thAmber)], priority:3,
-         style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFE8F5EE"}}, font:{color:{argb:"FF1F7D53"},bold:true}}}
-      ]
-    });
+    const bandRules = () => [
+      {type:"cellIs", operator:"lessThanOrEqual", formulae:[String(state.thRed)],  priority:1,
+       style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFFDECEA"}}, font:{color:{argb:"FFC0392F"},bold:true}}},
+      {type:"cellIs", operator:"lessThanOrEqual", formulae:[String(state.thAmber)], priority:2,
+       style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFFDF3E2"}}, font:{color:{argb:"FFA87F00"},bold:true}}},
+      {type:"cellIs", operator:"greaterThan", formulae:[String(state.thAmber)], priority:3,
+       style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFE8F5EE"}}, font:{color:{argb:"FF1F7D53"},bold:true}}}
+    ];
+    dohCols.forEach(c => ws.addConditionalFormatting({ref:`${c}${firstData}:${c}${lastData}`, rules:bandRules()}));
 
     /* ── Sheet 2: SKU drilldown, live formulas ── */
     const ds = wb.addWorksheet("SKU Drilldown", {views:[{state:"frozen", ySplit:1}]});
+    const dStock = {both:"D", fg:"E", it:"F"};
     const DHEAD = ["Warehouse","Item Code","Item Name","In Transit + FG","FG","In Transit","Projection Kgs","Projection Days",
-                   "Projection DRR","Pending Kgs","Dispatched Kgs","Pend + Disp","MTD Days","MTD DRR","Final DRR","DRR Source",
-                   "Selected Stock","DOH (days)"];
+                   "Projection DRR","Pending Kgs","Dispatched Kgs","Pend + Disp","MTD Days","MTD DRR","Final DRR","DRR Source"].concat(
+                   bases.length === 1 ? ["Selected Stock","DOH (days)"]
+                                      : bases.map(b => `DOH (days) — ${BASIS_LABEL[b]}`));
     ds.getRow(1).values = DHEAD; headerRow(ds, 1);
     ds.columns = [{width:14},{width:24},{width:52},{width:15},{width:12},{width:12},{width:14},{width:13},{width:14},
-                  {width:13},{width:14},{width:13},{width:11},{width:12},{width:12},{width:12},{width:14},{width:12}];
-    ds.autoFilter = "A1:R1";
-    const bcol = state.basis === "both" ? "D" : state.basis === "fg" ? "E" : "F";
+                  {width:13},{width:14},{width:13},{width:11},{width:12},{width:12},{width:12}].concat(
+                  bases.length === 1 ? [{width:14},{width:12}] : bases.map(() => ({width:22})));
+    ds.autoFilter = `A1:${COL(15 + (bases.length === 1 ? 2 : bases.length))}1`;
+    const dDohCols = bases.length === 1 ? ["R"] : bases.map((_, i) => COL(16 + i));
     let dr = 2;
     for (const w of r.warehouses) for (const s of w.skuRows){
       const x = dr;
-      ds.getRow(x).values = [w.cfa, s.code, s.name, s.both, s.fg, s.it, s.projKgs, r.projDays, null, s.pend, s.dispNil ? null : s.disp, null, r.mtdDays, null, null, null, null, null];
+      ds.getRow(x).values = [w.cfa, s.code, s.name, s.both, s.fg, s.it, s.projKgs, r.projDays, null, s.pend,
+                             s.dispNil ? null : s.disp, null, r.mtdDays, null, null, null];
       ds.getCell(`I${x}`).value = {formula:`IFERROR(G${x}/H${x},0)`};
       ds.getCell(`L${x}`).value = {formula:`J${x}+K${x}`};
       ds.getCell(`N${x}`).value = {formula:`IFERROR(L${x}/M${x},0)`};
       ds.getCell(`O${x}`).value = {formula:`MAX(I${x},N${x})`};
       ds.getCell(`P${x}`).value = {formula:`IF(O${x}=0,"-",IF(I${x}>=N${x},"Projection","MTD"))`};
-      ds.getCell(`Q${x}`).value = {formula:`${bcol}${x}`};
-      ds.getCell(`R${x}`).value = {formula:`IF(O${x}=0,"-",Q${x}/O${x})`};
-      ["D","E","F","G","I","J","K","L","N","O","Q","R"].forEach(c => ds.getCell(`${c}${x}`).numFmt = N);
+      if (bases.length === 1){
+        ds.getCell(`Q${x}`).value = {formula:`${dStock[bases[0]]}${x}`};
+        ds.getCell(`R${x}`).value = {formula:`IF($O${x}=0,"-",Q${x}/$O${x})`};
+        ds.getCell(`Q${x}`).numFmt = N;
+      } else {
+        bases.forEach((b, i) => ds.getCell(`${COL(16 + i)}${x}`).value =
+          {formula:`IF($O${x}=0,"-",${dStock[b]}${x}/$O${x})`});
+      }
+      ["D","E","F","G","I","J","K","L","N","O"].concat(dDohCols).forEach(c => ds.getCell(`${c}${x}`).numFmt = N);
       dr++;
     }
-    if (dr > 2) ds.addConditionalFormatting({
-      ref:`R2:R${dr-1}`,
-      rules:[
-        {type:"cellIs", operator:"lessThanOrEqual", formulae:[String(state.thRed)], priority:1,
-         style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFFDECEA"}}, font:{color:{argb:"FFC0392F"},bold:true}}},
-        {type:"cellIs", operator:"lessThanOrEqual", formulae:[String(state.thAmber)], priority:2,
-         style:{fill:{type:"pattern",pattern:"solid",bgColor:{argb:"FFFDF3E2"}}, font:{color:{argb:"FFB8791A"}}}}
-      ]
-    });
+    if (dr > 2) dDohCols.forEach(c => ds.addConditionalFormatting({ref:`${c}2:${c}${dr-1}`, rules:bandRules()}));
 
     /* ── Sheet 3: conditions & math ── */
     const lg = wb.addWorksheet("Logic & Conditions");
@@ -747,8 +803,11 @@ async function exportExcel(){
 
     sec("Condition 8 — DOH");
     kv("Formula", "DOH = selected in-hand stock ÷ Final DRR", true);
-    kv("Excel cells", `Warehouse DOH!P = ${basisCol} (the stock column for the chosen basis)\nWarehouse DOH!Q = IF(M=0,"-",P/M)`, true);
-    kv("Basis in this export", BASIS_LABEL[state.basis]);
+    kv("Excel cells", bases.length === 1
+      ? `Warehouse DOH!P = ${stockCol[bases[0]]} (the stock column for the chosen basis)\nWarehouse DOH!Q = IF($M=0,"-",P/$M)`
+      : bases.map((b, i) => `Warehouse DOH!${COL(14 + i)} = IF($M=0,"-",${stockCol[b]}/$M)   ${BASIS_LABEL[b]}`).join("\n"), true);
+    kv("Bases in this export", activeBases().map(b => BASIS_LABEL[b]).join(" · ") +
+       (activeBases().length > 1 ? " — one DOH column each, every one a live formula over the same Final DRR" : ""));
     kv("Zero DRR", "Where Final DRR is 0 the DOH prints as \"-\" rather than a division error.");
     gap();
 
@@ -831,6 +890,14 @@ function downloadCsv(name, rows){
 }
 
 /* ── wiring ────────────────────────────────────────────────── */
+function syncBasisToggle(){
+  $$("#basisToggle .seg-btn").forEach(b => {
+    const on = state.bases.includes(b.dataset.basis);
+    b.classList.toggle("is-on", on);
+    b.setAttribute("aria-pressed", on);
+  });
+}
+
 function showView(v){
   $$(".tab").forEach(t => t.classList.toggle("is-active", t.dataset.view === v));
   $$(".view").forEach(s => s.classList.toggle("is-active", s.id === "view-" + v));
@@ -843,7 +910,7 @@ function showView(v){
 function init(){
   loadMasters();
   $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber;
-  $$("#basisToggle .seg-btn").forEach(b => b.classList.toggle("is-on", b.dataset.basis === state.basis));
+  syncBasisToggle();
   renderFileTable(); renderSkuMaster(); renderWhMaster(); vizInit(); renderViz();
   $("#logicBody").innerHTML = logicHtml(null);
 
@@ -863,9 +930,14 @@ function init(){
   /* basis + thresholds */
   $("#basisToggle").addEventListener("click", e => {
     const b = e.target.closest(".seg-btn"); if (!b) return;
-    state.basis = b.dataset.basis; saveMasters();
-    $$("#basisToggle .seg-btn").forEach(x => x.classList.toggle("is-on", x === b));
-    compute();
+    const k = b.dataset.basis, on = state.bases.includes(k);
+    if (on && state.bases.length === 1){        // never leave the dashboard with no basis
+      toast("Keep at least one stock basis selected");
+      return;
+    }
+    state.bases = on ? state.bases.filter(x => x !== k) : [...state.bases, k];
+    if (!state.bases.includes(state.vizBasis)) state.vizBasis = primaryBasis();
+    saveMasters(); syncBasisToggle(); compute();
   });
   const thChange = () => {
     state.thRed = num($("#thRed").value); state.thAmber = num($("#thAmber").value);

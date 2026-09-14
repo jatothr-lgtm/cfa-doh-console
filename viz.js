@@ -71,7 +71,7 @@ function vizTiles(sl){
     tile(risk ? "amber" : "green", "Stock behind critical lines", fmt0(risk), "kg",
          `<span>held by SKUs under the red threshold</span>`) +
     tile(dead.length ? "red" : "green", "Selling with no stock", fmt0(dead.length), "SKUs",
-         `<span>demand on the books, ${BASIS_LABEL[state.basis].toLowerCase()} at zero</span>`);
+         `<span>demand on the books, ${BASIS_LABEL[state.vizBasis].toLowerCase()} at zero</span>`);
 }
 
 /* ══════════ 1 · critical SKUs ══════════ */
@@ -87,7 +87,7 @@ function chartCritical(sl){
     const pct = state.thRed > 0 ? Math.max((s.doh / state.thRed) * 100, 1.2) : 1.2;
     const t = tipId({title: `${s.code} — ${s.name}`, rows: [
       ["Warehouse", s.cfa], ["DOH", fmt(s.doh, 1) + " days"], ["Band", bandName(s.doh)],
-      [BASIS_LABEL[state.basis], fmt(s.sel) + " kg"], ["Final DRR", fmt(s.finalDRR) + " kg/day"], ["Driven by", s.drrSrc]
+      [BASIS_LABEL[state.vizBasis], fmt(s.sel) + " kg"], ["Final DRR", fmt(s.finalDRR) + " kg/day"], ["Driven by", s.drrSrc]
     ]});
     return `<div class="barrow" data-t="${t}" tabindex="0">
       <span class="b-code">${svgEsc(s.code)}</span>
@@ -111,7 +111,7 @@ function chartBullet(sl){
     const y = i * rowH + 8;
     const t = tipId({title: w.cfa, rows: [
       ["DOH", w.doh == null ? "—" : fmt(w.doh, 1) + " days"], ["Band", bandName(w.doh)],
-      [BASIS_LABEL[state.basis], fmt(w.sel) + " kg"], ["Final DRR", fmt(w.finalDRR) + " kg/day"], ["Driven by", w.drrSrc]
+      [BASIS_LABEL[state.vizBasis], fmt(w.sel) + " kg"], ["Final DRR", fmt(w.finalDRR) + " kg/day"], ["Driven by", w.drrSrc]
     ]});
     g += `<text class="catlabel strong" x="0" y="${y + 21}">${svgEsc(w.cfa)}</text>`
       +  `<rect class="band-red" x="${x0}" y="${y + 8}" width="${sx(state.thRed) - x0}" height="22" rx="3"/>`
@@ -240,7 +240,7 @@ function chartScatter(sl){
   for (const p of pts){
     const t = tipId({title: `${p.code} — ${p.name}`, rows: [
       ["Warehouse", p.cfa], ["DOH", fmt(p.doh, 1) + " days"], ["Band", bandName(p.doh)],
-      [BASIS_LABEL[state.basis], fmt(p.sel) + " kg"], ["Final DRR", fmt(p.finalDRR) + " kg/day"]
+      [BASIS_LABEL[state.vizBasis], fmt(p.sel) + " kg"], ["Final DRR", fmt(p.finalDRR) + " kg/day"]
     ]});
     g += `<circle class="dot ${bandCls(p.doh)}" cx="${sx(p.finalDRR).toFixed(1)}" cy="${sy(p.sel).toFixed(1)}" r="4.5"/>`
       +  `<circle class="hit" cx="${sx(p.finalDRR).toFixed(1)}" cy="${sy(p.sel).toFixed(1)}" r="12" data-t="${t}" tabindex="0"/>`;
@@ -248,7 +248,7 @@ function chartScatter(sl){
   g += `<line class="axisline" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}"/>`
     +  `<line class="axisline" x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}"/>`
     +  `<text class="axistext" x="${padL + plotW/2}" y="${H - 6}" text-anchor="middle">Final DRR — kg/day</text>`
-    +  `<text class="axistext" x="${-(padT + plotH/2)}" y="14" text-anchor="middle" transform="rotate(-90)">${svgEsc(BASIS_LABEL[state.basis])} — kg</text>`;
+    +  `<text class="axistext" x="${-(padT + plotH/2)}" y="14" text-anchor="middle" transform="rotate(-90)">${svgEsc(BASIS_LABEL[state.vizBasis])} — kg</text>`;
   return {svg: svg(W, H, g), pts};
 }
 
@@ -261,7 +261,7 @@ function chartDemand(sl){
     const pct = Math.max((s.finalDRR / max) * 100, 1.2);
     const t = tipId({title: `${s.code} — ${s.name}`, rows: [
       ["Warehouse", s.cfa], ["Final DRR", fmt(s.finalDRR) + " kg/day"], ["Driven by", s.drrSrc],
-      [BASIS_LABEL[state.basis], fmt(s.sel) + " kg"], ["DOH", fmt(s.doh, 1) + " days"], ["Band", bandName(s.doh)]
+      [BASIS_LABEL[state.vizBasis], fmt(s.sel) + " kg"], ["DOH", fmt(s.doh, 1) + " days"], ["Band", bandName(s.doh)]
     ]});
     const band = bandOf(s.doh);
     return `<div class="barrow" data-t="${t}" tabindex="0">
@@ -296,7 +296,7 @@ function renderViz(){
     r.warehouses.map(w => `<option value="${svgEsc(w.cfa)}">${svgEsc(w.cfa)}</option>`).join("");
   sel.value = [...sel.options].some(o => o.value === cur) ? cur : "ALL";
   state.vizWh = sel.value;
-  $$("#vizBasis .seg-btn").forEach(b => b.classList.toggle("is-on", b.dataset.basis === state.basis));
+  $$("#vizBasis .seg-btn").forEach(b => b.classList.toggle("is-on", b.dataset.basis === state.vizBasis));
 
   VT = [];
   const sl = vizSlice();
@@ -397,8 +397,8 @@ function vizInit(){
   $("#vizWh").addEventListener("change", e => { state.vizWh = e.target.value; renderViz(); });
   $("#vizBasis").addEventListener("click", e => {
     const b = e.target.closest(".seg-btn"); if (!b) return;
-    state.basis = b.dataset.basis; saveMasters();
-    $$("#basisToggle .seg-btn").forEach(x => x.classList.toggle("is-on", x.dataset.basis === state.basis));
+    // the charts plot one basis at a time; the dashboard can show several at once
+    state.vizBasis = b.dataset.basis; saveMasters();
     compute();
   });
 }
