@@ -23,7 +23,16 @@ Open `index.html` directly, or serve the folder:
 python -m http.server 8777 --directory cfa-doh-app
 ```
 
-To deploy: it is three static files — drop the folder on Vercel as a static project, no build step.
+To deploy: it is static files — drop the folder on Vercel as a static project, no build step.
+
+**Commit author matters on Vercel Hobby.** A push-triggered deploy is blocked unless the commit
+author is the Vercel account owner (`jatoth.r@farmley.com` / GitHub `jatothr-lgtm`). Committing under
+a different identity produces a deployment stuck in `BLOCKED` with no build log. This repo pins the
+author locally:
+
+```bash
+git config user.email "jatoth.r@farmley.com"
+```
 
 ## How to use
 
