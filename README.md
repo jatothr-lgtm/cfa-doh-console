@@ -74,18 +74,30 @@ warehouse divides by the same day — matching the worked example in the Conditi
 added beside it without changing any other figure:
 
 1. `day-of-month of MAX(Sales_Order_Date)`
-2. `that day + one per distinct date falling in an earlier month`
+2. `that day + one per distinct earlier date that carries CFA pendency`
 
 They are deliberately asymmetric. The latest month contributes its *day number* — days with no
-orders still count, because month-to-date means days elapsed. Earlier months contribute only the
-dates that actually appear in the file. A file confined to one month adds nothing and lands back on
-rule 1, which is why the reference workbook (all September 2026) gives 14 either way.
+orders still count, because month-to-date means days elapsed. An earlier date earns its day only
+when at least one row on it is **CFA-mapped, an active CFA SKU, and still has `Pending Kgs`**. An
+earlier date that is purely dispatched, or belongs to a non-CFA SKU or a non-CFA origin, adds
+nothing. A file confined to one month adds nothing either, which is why the reference workbook (all
+September 2026) gives 14 under both rules.
 
-Worked example — Sep 1–5 and 7–14, Aug 28/29/31, Jul 15/15/20:
+Worked example — max date 2026-09-14, plus five earlier dates:
+
+| Earlier date | Row | Counts? |
+|---|---|---|
+| 2026-08-28 | CFA (BLR), CFA SKU, 5 kg pending | **yes** |
+| 2026-08-29 | CFA (BLR), CFA SKU, dispatched only | no — no pendency |
+| 2026-08-31 | CFA (BLR), non-CFA SKU, pending | no — not a CFA SKU |
+| 2026-07-15 | Indore, CFA SKU, pending | no — not a CFA origin |
+| 2026-07-20 | CFA (GGN) pending + CFA (BLR) dispatched | **yes**, counted once |
 
 ```
-14 (max date's day)  +  3 (Aug)  +  2 (Jul, the repeated 15th counts once)  =  19
+14 (max date's day)  +  2 (qualifying earlier dates)  =  16
 ```
+
+The Data tab lists which earlier dates qualified and how many were skipped.
 
 If rule 2 is selected while *Limit dispatch rows to the month of the max date* is still ticked, the
 app warns: the kilos would come from one month while the divisor counts several.

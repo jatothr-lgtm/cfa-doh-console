@@ -341,18 +341,26 @@ function compute(){
   const autoMtdDays = maxDate ? maxDate.getDate() : null;
 
   // Alternate divisor: the max date's day-of-month PLUS one day for every distinct
-  // date that falls in a month other than the latest. A single-month file therefore
-  // adds nothing and lands back on the existing divisor.
-  const priorDates = new Set();
+  // date in an earlier month — but an earlier date only earns its day when that date
+  // carries actual CFA pendency, i.e. at least one row that is CFA-mapped, is an
+  // active CFA SKU, and still has Pending Kgs on it. An earlier date that is purely
+  // dispatched, or belongs to a non-CFA SKU or origin, adds nothing.
+  // A single-month file therefore adds nothing and lands back on the existing divisor.
+  const priorDates = new Set();       // earlier dates WITH CFA pendency — these count
+  const priorSkipped = new Set();     // earlier dates seen but without it
   const monthsSeen = new Set();
   if (maxDate){
     for (const r of dispatch.rows){
       const d = parseDate(pick(r, aDi.date));
       if (!d) continue;
       monthsSeen.add(d.getFullYear() * 100 + d.getMonth());
-      if (d.getMonth() !== maxDate.getMonth() || d.getFullYear() !== maxDate.getFullYear())
-        priorDates.add(ymd(d));
+      if (d.getMonth() === maxDate.getMonth() && d.getFullYear() === maxDate.getFullYear()) continue;
+      const key = ymd(d);
+      const w = mDi.get(norm(pick(r, aDi.wh)));
+      const qualifies = !!w && isSku(pick(r, aDi.code)) && num(pick(r, aDi.pend)) > PEND_EPS;
+      if (qualifies) priorDates.add(key); else priorSkipped.add(key);
     }
+    priorSkipped.forEach(k => { if (priorDates.has(k)) priorSkipped.delete(k); });
   }
   const priorDays = priorDates.size;
   const altMtdDays = autoMtdDays == null ? null : autoMtdDays + priorDays;
@@ -400,6 +408,7 @@ function compute(){
   state.result = {
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
     mtdDays, autoMtdDays, altMtdDays, priorDays, mtdMode, monthsSpanned: monthsSeen.size,
+    priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size,
     ovMtd, maxDate, limitMonth, outOfMonth, diag,
     activeSkus: skuMap.size, generatedAt: new Date()
   };
@@ -544,17 +553,23 @@ function renderMtdSetting(){
   if (!r || !r.maxDate){ note.textContent = ""; $("#mtdDaysAuto").textContent = "auto"; return; }
   const sum = `${r.autoMtdDays} + ${r.priorDays} = ${r.altMtdDays}`;
   $("#mtdDaysAuto").textContent = `auto: ${r.mtdMode === "plusPrior" ? r.altMtdDays : r.autoMtdDays}`;
+  const skipped = r.priorSkippedCount
+    ? ` ${r.priorSkippedCount} further earlier date(s) were skipped for carrying no CFA pendency.` : "";
   note.innerHTML = r.priorDays
     ? `Max <code>Sales_Order_Date</code> is ${ymd(r.maxDate)} → <b>${r.autoMtdDays}</b>. The file also holds
-       <b>${r.priorDays}</b> distinct date(s) in ${r.monthsSpanned - 1} earlier month(s), so the second rule gives
-       <b>${sum}</b>. Currently using <b>${r.mtdDays}</b>${r.ovMtd ? " (manual override)" : ""}.`
+       <b>${r.priorDays}</b> earlier date(s) that carry CFA pendency (${r.priorDatesList.slice(0, 8).join(", ")}${
+         r.priorDatesList.length > 8 ? ", …" : ""}), so the second rule gives <b>${sum}</b>.${skipped}
+       Currently using <b>${r.mtdDays}</b>${r.ovMtd ? " (manual override)" : ""}.`
       + (r.mtdMode === "plusPrior" && r.limitMonth
         ? `<br><span style="color:var(--red);font-weight:600">Heads up:</span> “Limit dispatch rows to the month of the max date”
            is on, so the kilos above the line come from the latest month only while the divisor counts earlier days too.
            Switch that off to keep numerator and divisor over the same period.`
         : "")
-    : `Max <code>Sales_Order_Date</code> is ${ymd(r.maxDate)} → <b>${r.autoMtdDays}</b>. Every row falls in that one month,
-       so both rules give the same divisor${r.ovMtd ? `; manual override of ${r.ovMtd} is in force` : ""}.`;
+    : `Max <code>Sales_Order_Date</code> is ${ymd(r.maxDate)} → <b>${r.autoMtdDays}</b>. ${
+         r.monthsSpanned > 1
+           ? `Earlier months are present but no earlier date carries CFA pendency${skipped ? ` (${r.priorSkippedCount} skipped)` : ""}, so both rules give the same divisor`
+           : "Every row falls in that one month, so both rules give the same divisor"
+       }${r.ovMtd ? `; manual override of ${r.ovMtd} is in force` : ""}.`;
 }
 
 function renderFileTable(){
@@ -626,13 +641,15 @@ MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
   <p>Two divisor rules are available; the second was added alongside the first and neither changes any other figure:</p>
   <ol>
     <li><strong>Day-of-month of the maximum <code>Sales_Order_Date</code></strong> — the original rule, and the default.</li>
-    <li><strong>That same day plus one for every distinct date falling in an earlier month.</strong> Days with no orders in the
-        latest month still count, because month-to-date means days elapsed; earlier months contribute only the dates that
-        actually appear in the file. A file confined to one month adds nothing and lands back on rule 1.</li>
+    <li><strong>That same day plus one for every distinct earlier date that carries CFA pendency.</strong> Days with no orders in the
+        latest month still count, because month-to-date means days elapsed. An earlier date earns its day only when at least one
+        row on it is CFA-mapped, is an active CFA SKU, and still has <code>Pending Kgs</code> on it — an earlier date that is
+        purely dispatched, or belongs to a non-CFA SKU or origin, adds nothing. A file confined to one month adds nothing either
+        and lands back on rule 1.</li>
   </ol>
   ${r && r.maxDate ? `<p>On the loaded file the max date is <strong>${ymd(r.maxDate)}</strong> → ${r.autoMtdDays}${
-    r.priorDays ? `, and ${r.priorDays} distinct date(s) sit in ${r.monthsSpanned - 1} earlier month(s), so rule 2 gives ${r.autoMtdDays} + ${r.priorDays} = <strong>${r.altMtdDays}</strong>`
-                : `, and every row falls in that one month, so both rules give <strong>${r.autoMtdDays}</strong>`
+    r.priorDays ? `, and ${r.priorDays} earlier date(s) carry CFA pendency, so rule 2 gives ${r.autoMtdDays} + ${r.priorDays} = <strong>${r.altMtdDays}</strong>${r.priorSkippedCount ? ` (${r.priorSkippedCount} earlier date(s) skipped for carrying none)` : ""}`
+                : `, and no earlier date carries CFA pendency, so both rules give <strong>${r.autoMtdDays}</strong>`
   }. In force: <strong>${r.mtdDays}</strong> day(s) — ${r.ovMtd ? "manual override" : r.mtdMode === "plusPrior" ? "rule 2" : "rule 1"}.</p>` : ""}
   <p> Dates arriving as text and as real dates are both parsed. No dispatch-status filter is applied: <code>Stock_qty</code> is taken as dispatched exactly as the Condition tab specifies.</p>
 
@@ -844,10 +861,14 @@ async function exportExcel(){
     kv("Excel cells", "Warehouse DOH!J = H+I  (Pend + Disp)\nWarehouse DOH!L = IFERROR(J/K, 0)  (÷ MTD Days)", true);
     kv("Divisor rule", [
       "1. day-of-month of MAX(Sales_Order_Date)                       <- default",
-      "2. that day + count of distinct dates in earlier months",
+      "2. that day + one per distinct earlier date that carries CFA pendency",
+      "   (earlier date counts only if some row on it is CFA-mapped, is an active",
+      "    CFA SKU, and still has Pending Kgs — dispatched-only dates add nothing)",
       "A single-month file gives the same answer either way."].join(String.fromCharCode(10)), true);
     kv("Divisor used", `${r.mtdDays} day(s)${r.maxDate ? ` — max Sales_Order_Date ${ymd(r.maxDate)} gives ${r.autoMtdDays}` : ""}` +
-      (r.priorDays ? `; ${r.priorDays} distinct date(s) in ${r.monthsSpanned - 1} earlier month(s) would make rule 2 give ${r.altMtdDays}` : "; the file holds one month only, so both rules agree") +
+      (r.priorDays ? `; ${r.priorDays} earlier date(s) carry CFA pendency (${r.priorDatesList.join(", ")}) so rule 2 gives ${r.altMtdDays}${r.priorSkippedCount ? `, with ${r.priorSkippedCount} earlier date(s) skipped for carrying none` : ""}`
+                   : (r.monthsSpanned > 1 ? "; earlier months are present but none carries CFA pendency, so both rules agree"
+                                          : "; the file holds one month only, so both rules agree")) +
       `. In force: ${r.ovMtd ? "manual override" : r.mtdMode === "plusPrior" ? "rule 2" : "rule 1"}.`);
     kv("Row scope", r.limitMonth
       ? `Dispatch rows are limited to the month of the max date; ${fmt0(r.outOfMonth)} row(s) fell outside and were excluded.`
