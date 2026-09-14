@@ -217,6 +217,61 @@ function chartSplit(sl){
   return {svg: svg(W, H, g)};
 }
 
+/* ══════════ 5b · Final DRR breakup, projection vs MTD ══════════ */
+/* Final DRR = MAX(projection, MTD), so a SKU's rate is set by exactly one of
+   them. This shows both rates side by side per SKU and which one won, plus a
+   summary of how the demand rate is split between the two sources. */
+function chartBreakup(sl){
+  const rows = sl.skus.filter(s => s.finalDRR > 0)
+    .sort((a, b) => b.finalDRR - a.finalDRR);
+  const byProj = rows.filter(s => s.drrSrc === "Projection");
+  const byMtd  = rows.filter(s => s.drrSrc === "MTD");
+  const sum = a => a.reduce((t, s) => t + s.finalDRR, 0);
+  const pSum = sum(byProj), mSum = sum(byMtd), total = pSum + mSum;
+
+  $("#breakupNote").textContent = rows.length
+    ? `${rows.length} SKU line(s) with demand. Each row shows both rates on the same scale — the longer one is the Final DRR.`
+    : "No SKU carries demand on this slice.";
+
+  const pct = v => total > 0 ? (v / total) * 100 : 0;
+  const summary = !rows.length ? "" : `
+    <div class="splitrow">
+      <span class="sp-seg s1" style="width:${pct(pSum).toFixed(2)}%"></span>
+      <span class="sp-seg s2" style="width:${pct(mSum).toFixed(2)}%"></span>
+    </div>
+    <div class="splitkeys">
+      <span><i class="l1"></i><b>${fmt0(pSum)} kg/day</b> set by projection
+        <span class="sp-sub">${byProj.length} SKU line(s) · ${fmt(pct(pSum), 1)}%</span></span>
+      <span><i class="l2"></i><b>${fmt0(mSum)} kg/day</b> set by MTD
+        <span class="sp-sub">${byMtd.length} SKU line(s) · ${fmt(pct(mSum), 1)}%</span></span>
+    </div>`;
+  $("#breakupSummary").innerHTML = summary;
+  if (!rows.length) return {html: empty("Nothing to break up here."), rows};
+
+  const max = Math.max(...rows.map(s => Math.max(s.projDRR, s.mtdDRR)), 1);
+  const html = `<div class="barlist names dual${sl.multi ? " has-wh" : ""}">` + rows.map(s => {
+    const t = tipId({title: `${s.code} — ${s.name}`, rows: [
+      ["Warehouse", s.cfa],
+      ["Projection DRR", fmt(s.projDRR) + " kg/day"],
+      ["MTD DRR", fmt(s.mtdDRR) + " kg/day"],
+      ["Final DRR", fmt(s.finalDRR) + " kg/day"],
+      ["Set by", s.drrSrc],
+      ["Gap", fmt(Math.abs(s.projDRR - s.mtdDRR)) + " kg/day"]
+    ]});
+    return `<div class="barrow" data-t="${t}" tabindex="0">
+      <span class="b-code" title="${svgEsc(s.name || s.code)}">${svgEsc(s.name || s.code)}</span>
+      ${sl.multi ? `<span class="b-wh">${svgEsc(s.cfa)}</span>` : ""}
+      <span class="b-track dual">
+        <span class="dl"><i class="s1" style="width:${((s.projDRR / max) * 100).toFixed(2)}%"></i></span>
+        <span class="dl"><i class="s2" style="width:${((s.mtdDRR / max) * 100).toFixed(2)}%"></i></span>
+      </span>
+      <span class="b-val">${fmt(s.finalDRR, 0)}</span>
+      <span class="b-note"><span class="tag ${s.drrSrc === 'Projection' ? 'proj' : 'mtd'}">${svgEsc(s.drrSrc)}</span></span>
+    </div>`;
+  }).join("") + "</div>";
+  return {html, rows};
+}
+
 /* ══════════ 6 · risk map ══════════ */
 function chartScatter(sl){
   const pts = sl.skus.filter(s => s.finalDRR > 0);
@@ -346,6 +401,16 @@ function renderViz(){
       <span><i class="l1"></i>Finished goods</span><span><i class="l2"></i>In transit</span></div>`;
   $("#table-split").innerHTML = tbl(["Warehouse","FG (kg)","In Transit (kg)","Total (kg)","FG share"],
     sl.whs.map(w => [svgEsc(w.cfa), fmt(w.fg), fmt(w.it), fmt(w.both), fmt(w.both ? w.fg/w.both*100 : 0,1) + " %"]));
+
+  const bk = chartBreakup(sl);
+  $("#chart-breakup").innerHTML = bk.html + `<div class="vizlegend">
+      <span><i class="l1"></i>Projection DRR</span><span><i class="l2"></i>Pendency + dispatch MTD DRR</span>
+      <span style="color:var(--ink-3)">both bars share one scale; Final DRR is the longer of the two</span></div>`;
+  $("#table-breakup").innerHTML = (bk.rows || []).length
+    ? tbl(["Item Code","Item Name","Warehouse","Projection DRR","MTD DRR","Final DRR","Set by","Gap"],
+        bk.rows.map(s => [svgEsc(s.code), `<span class="name">${svgEsc(s.name)}</span>`, svgEsc(s.cfa),
+          fmt(s.projDRR), fmt(s.mtdDRR), fmt(s.finalDRR), svgEsc(s.drrSrc), fmt(Math.abs(s.projDRR - s.mtdDRR))]))
+    : `<p class="vizempty">No SKU carries demand on this slice.</p>`;
 
   const sc = chartScatter(sl);
   $("#chart-scatter").innerHTML = sc.svg + `<div class="vizlegend">
