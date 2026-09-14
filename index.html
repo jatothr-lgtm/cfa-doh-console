@@ -21,6 +21,7 @@
   <nav class="tabs" id="tabs">
     <button class="tab is-active" data-view="dashboard">Dashboard</button>
     <button class="tab" data-view="upload">Data</button>
+    <button class="tab" data-view="viz">Visualisation</button>
     <button class="tab" data-view="skus">CFA SKU Master</button>
     <button class="tab" data-view="wh">Warehouse Master</button>
     <button class="tab" data-view="logic">Logic</button>
@@ -137,6 +138,108 @@
   </div>
 </section>
 
+<!-- ══════════ VISUALISATION ══════════ -->
+<section class="view" id="view-viz">
+
+  <div class="toolbar filterbar">
+    <label class="mini">Warehouse
+      <select id="vizWh"></select>
+    </label>
+    <div class="seg" id="vizBasis" role="group" aria-label="Stock basis">
+      <button class="seg-btn is-on" data-basis="both">In Transit + FG</button>
+      <button class="seg-btn" data-basis="fg">FG only</button>
+      <button class="seg-btn" data-basis="it">In Transit only</button>
+    </div>
+    <div class="spacer"></div>
+    <span class="mini" id="vizScope"></span>
+  </div>
+
+  <div id="vizEmpty" class="empty">
+    <div class="empty-art">▦</div>
+    <h2>Nothing to plot yet</h2>
+    <p>Load the three source files and every chart here fills in.</p>
+    <button class="btn btn-primary" data-goto="upload">Go to Data</button>
+  </div>
+
+  <div id="vizBody" hidden>
+    <div class="kpis" id="vizTiles"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Critical SKUs — DOH at or below the red threshold</h2>
+        <button class="btn btn-sm btn-ghost" data-viztable="critical">Table view</button>
+      </div>
+      <p class="note" id="criticalNote"></p>
+      <div class="chart scroll-y" id="chart-critical"></div>
+      <div class="tablewrap tall" id="table-critical" hidden></div>
+    </div>
+
+    <div class="viz-row">
+      <div class="card">
+        <div class="card-head">
+          <h2>Cover against the thresholds</h2>
+          <button class="btn btn-sm btn-ghost" data-viztable="bullet">Table view</button>
+        </div>
+        <p class="note">Each track runs from 0 days to twice the amber threshold. The bar is the warehouse's DOH.</p>
+        <div class="chart" id="chart-bullet"></div>
+        <div class="tablewrap" id="table-bullet" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>How many SKUs sit in each cover band</h2>
+          <button class="btn btn-sm btn-ghost" data-viztable="dist">Table view</button>
+        </div>
+        <p class="note">Every SKU with demand, bucketed by days of cover.</p>
+        <div class="chart" id="chart-dist"></div>
+        <div class="tablewrap" id="table-dist" hidden></div>
+      </div>
+    </div>
+
+    <div class="viz-row">
+      <div class="card">
+        <div class="card-head">
+          <h2>What sets the DRR — projection vs MTD</h2>
+          <button class="btn btn-sm btn-ghost" data-viztable="drr">Table view</button>
+        </div>
+        <p class="note">The taller of the two is the Final DRR that divides into stock (Condition 7).</p>
+        <div class="chart" id="chart-drr"></div>
+        <div class="tablewrap" id="table-drr" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Stock split — FG vs In Transit</h2>
+          <button class="btn btn-sm btn-ghost" data-viztable="split">Table view</button>
+        </div>
+        <p class="note">What the toggle is choosing between, per warehouse.</p>
+        <div class="chart" id="chart-split"></div>
+        <div class="tablewrap" id="table-split" hidden></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Risk map — stock against daily demand</h2>
+        <button class="btn btn-sm btn-ghost" data-viztable="scatter">Table view</button>
+      </div>
+      <p class="note">One dot per SKU. The diagonals are constant cover: anything below the lower line has less than the red threshold in days.</p>
+      <div class="chart" id="chart-scatter"></div>
+      <div class="tablewrap tall" id="table-scatter" hidden></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Where the demand sits — top 15 SKUs by Final DRR</h2>
+        <button class="btn btn-sm btn-ghost" data-viztable="demand">Table view</button>
+      </div>
+      <p class="note">The highest-volume lines, coloured by their own cover band.</p>
+      <div class="chart" id="chart-demand"></div>
+      <div class="tablewrap tall" id="table-demand" hidden></div>
+    </div>
+  </div>
+</section>
+
 <!-- ══════════ SKU MASTER ══════════ -->
 <section class="view" id="view-skus">
   <div class="card">
@@ -183,6 +286,7 @@
 <div class="toast" id="toast" hidden></div>
 <input type="file" id="csvPicker" accept=".csv" hidden>
 
+<script src="viz.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

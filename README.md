@@ -12,6 +12,7 @@ Implements the `Condition` tab of *Warehouse Wise Stock Qty and Stock Balance -T
 | `index.html` | the app shell — five tabs |
 | `styles.css` | design tokens, light + dark |
 | `app.js` | parsing, calculation, masters, Excel export |
+| `viz.js` | the Visualisation tab — charts drawn by hand, no chart library |
 | `sample-data/` | local only, gitignored — the three source tabs split into separate workbooks for testing. Not in the repo: it holds real customer and rate data. Recreate it by saving the `In Hand`, `Projection` and `dispatches plus pendencies` tabs as three separate workbooks. |
 
 ## Running it
@@ -28,8 +29,9 @@ To deploy: it is three static files — drop the folder on Vercel as a static pr
 
 1. **Data** tab → load the three files (click or drag). Headers are validated on load; a file that looks like a different dataset is flagged.
 2. **Dashboard** → KPI per CFA, warehouse summary, SKU drilldown, diagnostics.
-3. The **In Transit + FG / FG only / In Transit only** toggle re-computes DOH instantly.
-4. **Export Excel** → a workbook where every derived number is a live formula.
+3. **Visualisation** → every critical SKU, plus six charts of the whole analysis.
+4. The **In Transit + FG / FG only / In Transit only** toggle re-computes DOH instantly.
+5. **Export Excel** → a workbook where every derived number is a live formula.
 
 ## Calculation (Conditions 4–8)
 
@@ -50,6 +52,31 @@ warehouse divides by the same day — matching the worked example in the Conditi
 
 Both divisors can be overridden on the Data tab; an override is carried into the export and the
 Logic sheet.
+
+## Visualisation tab
+
+One filter row — warehouse and stock basis — scopes everything below it. The basis toggle is the
+same state as the dashboard's, so the two never disagree.
+
+| | |
+|---|---|
+| Four stat tiles | critical SKU count, weakest warehouse, stock behind critical lines, SKUs selling with no stock |
+| **Critical SKUs** | every SKU line at or below the red threshold, worst first, with stock and DRR per row — the answer to "what is about to run out" |
+| Cover against thresholds | a bullet track per warehouse with the red/amber/green bands drawn behind the bar |
+| Cover-band distribution | how many SKUs sit in each band |
+| Projection vs MTD DRR | which of the two sets the Final DRR, per warehouse |
+| FG vs In Transit | what the basis toggle is choosing between |
+| Risk map | stock against daily demand, one dot per SKU, with constant-cover diagonals |
+| Top 15 by Final DRR | where the volume actually is, coloured by each SKU's own band |
+
+Charts are hand-drawn SVG and HTML — no chart library, nothing fetched at runtime.
+
+**Colour discipline.** Red/amber/green mean a DOH band and never identity; blue/orange carry
+identity (projection vs MTD, FG vs In Transit) and never status. The categorical pair was validated
+for colour-vision separation in both light and dark mode. A red/amber/green trio cannot clear that
+gate on hue alone, so every status mark is also labelled in text, and **every chart has a table
+view** beside it. The amber token was re-stepped to `#a87f00` (light) / `#e8b13a` (dark) because the
+previous amber sat too close to red for normal vision to separate.
 
 ## Colour coding
 

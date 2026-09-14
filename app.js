@@ -113,7 +113,7 @@ let state = {
   skus: null, wh: null,
   basis: "both", thRed: 15, thAmber: 30,
   files: {inhand:null, projection:null, dispatch:null},
-  result: null, skuFilterWh: "ALL", skuQuery: ""
+  result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL"
 };
 
 function loadMasters(){
@@ -369,6 +369,7 @@ function render(){
   $("#emptyState").hidden = !!r;
   $("#results").hidden = !r;
   $("#btnExport").disabled = !r;
+  renderViz();
   if (!r) return;
   renderKpis(r); renderWhTable(r); renderWhFilter(r); renderSkuTable(r); renderDiag(r);
   $("#paramNote").textContent =
@@ -828,7 +829,7 @@ function init(){
   loadMasters();
   $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber;
   $$("#basisToggle .seg-btn").forEach(b => b.classList.toggle("is-on", b.dataset.basis === state.basis));
-  renderFileTable(); renderSkuMaster(); renderWhMaster();
+  renderFileTable(); renderSkuMaster(); renderWhMaster(); vizInit(); renderViz();
   $("#logicBody").innerHTML = logicHtml(null);
 
   $("#tabs").addEventListener("click", e => { const t = e.target.closest(".tab"); if (t) showView(t.dataset.view); });
