@@ -307,6 +307,16 @@ function compute(){
     PIVOT_DIMS.forEach(d => { if (d.sku && d.disp) noteDim(code, d.key, pick(r, d.disp)); });
   }
 
+  /* Every input row, flagged with whether it counted and why not. The export
+     writes these to data sheets and drives every number off them with SUMIFS,
+     so no figure in the workbook is a value typed in by this app. */
+  const DR = {inhand:[], projection:[], dispatch:[]};
+  const dimsOf = code => {
+    const e = skuDim.get(norm(code)) || {};
+    return {itemGroup:e.itemGroup || "(unmapped)", misGroup:e.misGroup || "(unmapped)",
+            itemParent:e.itemParent || "(unmapped)", itemType:e.itemType || "(unmapped)"};
+  };
+
   const PV = new Map();                            // pivot name -> Map(key -> agg)
   const pvAdd = (pivot, key, field, value, code) => {
     const k = String(key ?? "").trim() || "(blank)";
@@ -333,9 +343,15 @@ function compute(){
   for (const r of inhand.rows){
     const raw = pick(r, aIn.wh), code = pick(r, aIn.code);
     const w = mIn.get(norm(raw));
-    if (!w){ trackUnmapped("inhand", raw); continue; }
-    if (!isSku(code)){ diag.nonSku.inhand++; continue; }
-    const q = num(pick(r, aIn.qty));
+    const qty = num(pick(r, aIn.qty));
+    const dm = dimsOf(code);
+    const push = (cfa, type, ok, why) => DR.inhand.push({raw:String(raw ?? ""), cfa, type,
+      code:String(code ?? "").trim(), name:String(pick(r, aIn.name) ?? ""), ...dm, qty, ok, why,
+      whGroup:`${cfa} — ${dm.itemGroup}`});
+    if (!w){ trackUnmapped("inhand", raw); push("", "", 0, "warehouse not mapped to a CFA"); continue; }
+    if (!isSku(code)){ diag.nonSku.inhand++; push(w.cfa, w.type, 0, "not an active CFA SKU"); continue; }
+    const q = qty;
+    push(w.cfa, w.type, 1, "");
     const bucket = W.get(w.cfa); if (!bucket) continue;
     const sku = rowFor(w.cfa, code, pick(r, aIn.name));
     if (w.type === "FG"){ bucket.fg += q; sku.fg += q; }
@@ -366,9 +382,16 @@ function compute(){
   for (const r of projection.rows){
     const raw = pick(r, aPr.wh), code = pick(r, aPr.code);
     const w = mPr.get(norm(raw));
-    if (!w){ trackUnmapped("projection", raw); continue; }
-    if (!isSku(code)){ diag.nonSku.projection++; continue; }
-    const q = num(pick(r, aPr.qty));
+    const qty = num(pick(r, aPr.qty));
+    const dm = dimsOf(code);
+    const push = (cfa, ok, why) => DR.projection.push({raw:String(raw ?? ""), cfa,
+      code:String(code ?? "").trim(), ...dm,
+      custGroup:String(pick(r, ["Customer Group"]) ?? ""), customer:String(pick(r, ["Customer"]) ?? ""),
+      qty, ok, why, whGroup:`${cfa} — ${dm.itemGroup}`});
+    if (!w){ trackUnmapped("projection", raw); push("", 0, "warehouse not mapped to a CFA"); continue; }
+    if (!isSku(code)){ diag.nonSku.projection++; push(w.cfa, 0, "not an active CFA SKU"); continue; }
+    const q = qty;
+    push(w.cfa, 1, "");
     const bucket = W.get(w.cfa); if (!bucket) continue;
     bucket.projKgs += q;
     rowFor(w.cfa, code, pick(r, aPr.name)).projKgs += q;
@@ -387,11 +410,22 @@ function compute(){
     if (d && (!maxDate || d > maxDate)) maxDate = d;
   }
   const dispRows = [];
+  const dispPush = (r, cfa, ok, why, bucket) => {
+    const code = pick(r, aDi.code), dm = dimsOf(code);
+    DR.dispatch.push({raw:String(pick(r, aDi.wh) ?? ""), cfa, code:String(code ?? "").trim(),
+      name:String(pick(r, aDi.name) ?? ""), ...dm,
+      custGroup:String(pick(r, ["customer_group","Customer Group"]) ?? ""),
+      customer:String(pick(r, ["Customer"]) ?? ""),
+      state:String(pick(r, ["Shipping State"]) ?? ""),
+      date:parseDate(pick(r, aDi.date)),
+      pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)),
+      bucket, ok, why, whGroup:`${cfa} — ${dm.itemGroup}`});
+  };
   for (const r of dispatch.rows){
     const raw = pick(r, aDi.wh), code = pick(r, aDi.code);
     const w = mDi.get(norm(raw));
-    if (!w){ trackUnmapped("dispatch", raw); continue; }
-    if (!isSku(code)){ diag.nonSku.dispatch++; continue; }
+    if (!w){ trackUnmapped("dispatch", raw); dispPush(r, "", 0, "origin not mapped to a CFA", ""); continue; }
+    if (!isSku(code)){ diag.nonSku.dispatch++; dispPush(r, w.cfa, 0, "not an active CFA SKU", ""); continue; }
     dispRows.push({w, code, row:r, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)), d:parseDate(pick(r, aDi.date))});
   }
   const autoMtdDays = maxDate ? maxDate.getDate() : null;
@@ -429,7 +463,9 @@ function compute(){
   const mtdDays = ovMtd || modeDays || 1;
   let outOfMonth = 0;
   for (const x of dispRows){
-    if (limitMonth && maxDate && x.d && (x.d.getMonth() !== maxDate.getMonth() || x.d.getFullYear() !== maxDate.getFullYear())){ outOfMonth++; continue; }
+    if (limitMonth && maxDate && x.d && (x.d.getMonth() !== maxDate.getMonth() || x.d.getFullYear() !== maxDate.getFullYear())){
+      outOfMonth++; dispPush(x.row, x.w.cfa, 0, "outside the month of the max date", ""); continue;
+    }
     const bucket = W.get(x.w.cfa); if (!bucket) continue;
     const sku = rowFor(x.w.cfa, x.code, x.name);
     // Each row lands in exactly one bucket. A row with pending kilos is Pending;
@@ -439,10 +475,12 @@ function compute(){
     if (x.pend > PEND_EPS){
       bucket.pend += x.pend; sku.pend += x.pend;
       fanOut("disp", x.code, x.w.cfa, x.row, "pend", x.pend);
+      dispPush(x.row, x.w.cfa, 1, "", "Pendency");
     } else {
       bucket.disp += x.disp; sku.disp += x.disp;
       bucket.dispRows++;     sku.dispRows++;
       fanOut("disp", x.code, x.w.cfa, x.row, "disp", x.disp);
+      dispPush(x.row, x.w.cfa, 1, "", "Dispatched");
     }
     diag.kept.dispatch++;
   }
@@ -469,6 +507,9 @@ function compute(){
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
     mtdDays, autoMtdDays, altMtdDays, priorDays, mtdMode, monthsSpanned: monthsSeen.size,
     priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size, pivots: PV,
+    dataRows: DR,
+    groupKeys: [...PV.entries()].flatMap(([pivot, m]) =>
+      [...m.entries()].flatMap(([key, a]) => [...a.skus].map(code => ({pivot, key, code})))),
     ovMtd, maxDate, limitMonth, outOfMonth, diag,
     activeSkus: skuMap.size, generatedAt: new Date()
   };
@@ -757,15 +798,103 @@ async function exportExcel(){
     };
     const N = "#,##0.00";
 
+    /* ── Data sheets: every input row, flagged. Every number elsewhere in this
+       workbook is a SUMIFS or COUNTIFS over these three sheets, so nothing is a
+       value this app typed in — change a row here and the whole book re-computes. ── */
+    const dataSheet = (title, cols, rows) => {
+      const sh = wb.addWorksheet(title, {views:[{state:"frozen", ySplit:1}]});
+      sh.columns = cols.map(c => ({width:c.w}));
+      sh.getRow(1).values = cols.map(c => c.h); headerRow(sh, 1);
+      rows.forEach((r, i) => {
+        const row = sh.getRow(i + 2);
+        row.values = cols.map(c => c.v(r));
+        cols.forEach((c, j) => {
+          if (c.n) row.getCell(j + 1).numFmt = N;
+          if (c.d) row.getCell(j + 1).numFmt = "yyyy-mm-dd";
+        });
+      });
+      sh.autoFilter = `A1:${COL(cols.length - 1)}1`;
+      return {sh, last: rows.length + 1};
+    };
+    const DIM_COLS = [
+      {h:"Item Group", w:22, v:r => r.itemGroup},
+      {h:"MIS Item Group", w:22, v:r => r.misGroup},
+      {h:"Item Parent", w:26, v:r => r.itemParent},
+      {h:"Item Type", w:14, v:r => r.itemType}
+    ];
+    const IH = dataSheet("Data - In Hand", [
+      {h:"Warehouse (raw)", w:44, v:r => r.raw}, {h:"CFA", w:13, v:r => r.cfa},
+      {h:"Stock Type", w:13, v:r => r.type}, {h:"Item Code", w:24, v:r => r.code},
+      {h:"Item Name", w:44, v:r => r.name}, ...DIM_COLS,
+      {h:"CFA x Item Group", w:32, v:r => r.whGroup},
+      {h:"Balance Qty", w:14, v:r => r.qty, n:true},
+      {h:"Counted", w:9, v:r => r.ok}, {h:"Excluded because", w:30, v:r => r.why}
+    ], r.dataRows.inhand);
+    const PJ = dataSheet("Data - Projection", [
+      {h:"Wareouse (raw)", w:44, v:r => r.raw}, {h:"CFA", w:13, v:r => r.cfa},
+      {h:"Item Code", w:24, v:r => r.code}, ...DIM_COLS,
+      {h:"Customer Group", w:20, v:r => r.custGroup}, {h:"Customer", w:34, v:r => r.customer},
+      {h:"CFA x Item Group", w:32, v:r => r.whGroup},
+      {h:"Total KGs", w:14, v:r => r.qty, n:true},
+      {h:"Counted", w:9, v:r => r.ok}, {h:"Excluded because", w:30, v:r => r.why}
+    ], r.dataRows.projection);
+    const DP = dataSheet("Data - Dispatch", [
+      {h:"Origin (raw)", w:20, v:r => r.raw}, {h:"CFA", w:13, v:r => r.cfa},
+      {h:"Item Code", w:24, v:r => r.code}, {h:"Item Name", w:44, v:r => r.name}, ...DIM_COLS,
+      {h:"Customer Group", w:20, v:r => r.custGroup}, {h:"Customer", w:34, v:r => r.customer},
+      {h:"Shipping State", w:18, v:r => r.state},
+      {h:"CFA x Item Group", w:32, v:r => r.whGroup},
+      // A real date, not text — DAY(MAX(...)) on the divisor depends on it. Stored at
+      // UTC midnight: ExcelJS serialises via UTC, so a local-midnight date would land
+      // in the sheet as the previous calendar day and shift the divisor by one.
+      {h:"Sales_Order_Date", w:16, d:true,
+       v:r => r.date ? new Date(Date.UTC(r.date.getFullYear(), r.date.getMonth(), r.date.getDate())) : null},
+      {h:"Pending Kgs", w:13, v:r => r.pend, n:true}, {h:"Stock_qty", w:13, v:r => r.disp, n:true},
+      {h:"Bucket", w:13, v:r => r.bucket},
+      {h:"Counted", w:9, v:r => r.ok}, {h:"Excluded because", w:30, v:r => r.why}
+    ], r.dataRows.dispatch);
+
+    const GK = wb.addWorksheet("Data - Group Keys", {views:[{state:"frozen", ySplit:1}]});
+    GK.columns = [{width:26},{width:40},{width:24}];
+    GK.getRow(1).values = ["Pivot","Group","Item Code"]; headerRow(GK, 1);
+    r.groupKeys.forEach((g, i) => GK.getRow(i + 2).values = [g.pivot, g.key, g.code]);
+    GK.autoFilter = "A1:C1";
+    const gkLast = r.groupKeys.length + 1;
+
+    /* column letters on the data sheets, by name */
+    const ihCol = {cfa:"B", type:"C", code:"D", itemGroup:"F", misGroup:"G", itemParent:"H", itemType:"I", whGroup:"J", qty:"K", ok:"L"};
+    const pjCol = {cfa:"B", code:"C", itemGroup:"D", misGroup:"E", itemParent:"F", itemType:"G", custGroup:"H", customer:"I", whGroup:"J", qty:"K", ok:"L"};
+    const dpCol = {cfa:"B", code:"C", itemGroup:"E", misGroup:"F", itemParent:"G", itemType:"H", custGroup:"I", customer:"J", state:"K", whGroup:"L", date:"M", pend:"N", disp:"O", bucket:"P", ok:"Q"};
+    const IHR = n => `'Data - In Hand'!$${n}$2:$${n}$${IH.last}`;
+    const PJR = n => `'Data - Projection'!$${n}$2:$${n}$${PJ.last}`;
+    const DPR = n => `'Data - Dispatch'!$${n}$2:$${n}$${DP.last}`;
+    /* crit: [column, criterion] pairs where criterion is a cell ref or a quoted literal */
+    const sumifs = (range, ok, pairs) =>
+      `SUMIFS(${range},${pairs.map(([c, v]) => `${c},${v}`).join(",")},${ok},1)`;
+    const fFG   = (cell, extra = []) => sumifs(IHR(ihCol.qty), IHR(ihCol.ok), [...extra, [IHR(ihCol.type), '"FG"']]);
+    const fIT   = (cell, extra = []) => sumifs(IHR(ihCol.qty), IHR(ihCol.ok), [...extra, [IHR(ihCol.type), '"In Transit"']]);
+    const fPROJ = extra => sumifs(PJR(pjCol.qty), PJR(pjCol.ok), extra);
+    const fPEND = extra => sumifs(DPR(dpCol.pend), DPR(dpCol.ok), [...extra, [DPR(dpCol.bucket), '"Pendency"']]);
+    const fDISP = extra => sumifs(DPR(dpCol.disp), DPR(dpCol.ok), [...extra, [DPR(dpCol.bucket), '"Dispatched"']]);
+
+    // Divisors as formulas wherever the rule can be expressed over the data sheet.
+    const pm = r.projMonthLabel.match(/^(\w+) (\d{4})$/);
+    const projDaysF = (!r.ovProj && pm)
+      ? `DAY(EOMONTH(DATE(${pm[2]},${MONTHS.indexOf(pm[1].toLowerCase()) + 1},1),0))`
+      : `${r.projDays}`;
+    const mtdDaysF = (!r.ovMtd && r.mtdMode !== "plusPrior")
+      ? `DAY(MAX(${DPR(dpCol.date)}))`
+      : `${r.mtdDays}`;
+
     /* ── Sheet 1: warehouse summary, live formulas ── */
     const ws = wb.addWorksheet("Warehouse DOH", {views:[{state:"frozen", xSplit:1, ySplit:5}]});
     ws.mergeCells("A1:Q1");
     ws.getCell("A1").value = "CFA Warehouse-wise Days on Hand";
     ws.getCell("A1").font = {bold:true, size:15, color:{argb:BRAND}};
     ws.getCell("A3").value = "Stock basis";           ws.getCell("B3").value = activeBases().map(b => BASIS_LABEL[b]).join(" · ");
-    ws.getCell("D3").value = "Projection divisor";    ws.getCell("E3").value = r.projDays;
+    ws.getCell("D3").value = "Projection divisor";    ws.getCell("E3").value = {formula:projDaysF};
     ws.getCell("F3").value = `(${r.projMonthLabel}${r.ovProj ? ", manual" : ", calendar days"})`;
-    ws.getCell("H3").value = "MTD divisor";           ws.getCell("I3").value = r.mtdDays;
+    ws.getCell("H3").value = "MTD divisor";           ws.getCell("I3").value = {formula:mtdDaysF};
     ws.getCell("J3").value = `(max Sales_Order_Date ${r.maxDate ? ymd(r.maxDate) : "n/a"}${r.ovMtd ? ", manual" : ""})`;
     ws.getCell("L3").value = "Generated";             ws.getCell("M3").value = r.generatedAt.toLocaleString("en-IN");
     ["A3","D3","H3","L3"].forEach(c => ws.getCell(c).font = {bold:true, size:10});
@@ -791,8 +920,16 @@ async function exportExcel(){
     const firstData = rr;
     for (const w of r.warehouses){
       const x = rr;
-      ws.getRow(x).values = [w.cfa, w.both, w.fg, w.it, w.projKgs, r.projDays, null, w.pend,
-                             w.dispNil ? null : w.disp, null, r.mtdDays, null, null, null];
+      ws.getRow(x).values = [w.cfa, null, null, null, null, null, null, null, null, null, null, null, null, null];
+      const byCfa = c => [[c, `$A${x}`]];
+      ws.getCell(`C${x}`).value = {formula:fFG(x, byCfa(IHR(ihCol.cfa)))};
+      ws.getCell(`D${x}`).value = {formula:fIT(x, byCfa(IHR(ihCol.cfa)))};
+      ws.getCell(`B${x}`).value = {formula:`C${x}+D${x}`};
+      ws.getCell(`E${x}`).value = {formula:fPROJ(byCfa(PJR(pjCol.cfa)))};
+      ws.getCell(`F${x}`).value = {formula:projDaysF};
+      ws.getCell(`H${x}`).value = {formula:fPEND(byCfa(DPR(dpCol.cfa)))};
+      if (!w.dispNil) ws.getCell(`I${x}`).value = {formula:fDISP(byCfa(DPR(dpCol.cfa)))};
+      ws.getCell(`K${x}`).value = {formula:mtdDaysF};
       ws.getCell(`G${x}`).value = {formula:`IFERROR(E${x}/F${x},0)`};
       ws.getCell(`J${x}`).value = {formula:`H${x}+I${x}`};
       ws.getCell(`L${x}`).value = {formula:`IFERROR(J${x}/K${x},0)`};
@@ -851,8 +988,17 @@ async function exportExcel(){
     let dr = 2;
     for (const w of r.warehouses) for (const s of w.skuRows){
       const x = dr;
-      ds.getRow(x).values = [w.cfa, s.code, s.name, s.both, s.fg, s.it, s.projKgs, r.projDays, null, s.pend,
-                             s.dispNil ? null : s.disp, null, r.mtdDays, null, null, null];
+      ds.getRow(x).values = [w.cfa, s.code, s.name, null, null, null, null, null, null, null, null, null, null, null, null, null];
+      const key = c => [[c, `$A${x}`]];
+      const keyCode = (c, cc) => [[c, `$A${x}`], [cc, `$B${x}`]];
+      ds.getCell(`E${x}`).value = {formula:fFG(x, keyCode(IHR(ihCol.cfa), IHR(ihCol.code)))};
+      ds.getCell(`F${x}`).value = {formula:fIT(x, keyCode(IHR(ihCol.cfa), IHR(ihCol.code)))};
+      ds.getCell(`D${x}`).value = {formula:`E${x}+F${x}`};
+      ds.getCell(`G${x}`).value = {formula:fPROJ(keyCode(PJR(pjCol.cfa), PJR(pjCol.code)))};
+      ds.getCell(`H${x}`).value = {formula:projDaysF};
+      ds.getCell(`J${x}`).value = {formula:fPEND(keyCode(DPR(dpCol.cfa), DPR(dpCol.code)))};
+      if (!s.dispNil) ds.getCell(`K${x}`).value = {formula:fDISP(keyCode(DPR(dpCol.cfa), DPR(dpCol.code)))};
+      ds.getCell(`M${x}`).value = {formula:mtdDaysF};
       ds.getCell(`I${x}`).value = {formula:`IFERROR(G${x}/H${x},0)`};
       ds.getCell(`L${x}`).value = {formula:`J${x}+K${x}`};
       ds.getCell(`N${x}`).value = {formula:`IFERROR(L${x}/M${x},0)`};
@@ -991,8 +1137,14 @@ async function exportExcel(){
     for (const name of pivotOrder){
       const m = r.pivots.get(name);
       if (!m || !m.size) continue;
-      const hasStock = [...m.values()].some(a => a.both || a.fg || a.it);
-      const hasProj  = [...m.values()].some(a => a.projKgs);
+      const dim = PIVOT_DIMS.find(d => d.label === name);
+      const dimCols = name === "Warehouse"              ? {ih:ihCol.cfa, pj:pjCol.cfa, dp:dpCol.cfa}
+                    : name === "Warehouse x item group" ? {ih:ihCol.whGroup, pj:pjCol.whGroup, dp:dpCol.whGroup}
+                    : {ih: dim.sku ? ihCol[dim.key] : null,
+                       pj: dim.sku ? pjCol[dim.key] : (dim.proj ? pjCol[dim.key] : null),
+                       dp: dpCol[dim.key] || null};
+      const hasStock = !!dimCols.ih && [...m.values()].some(a => a.both || a.fg || a.it);
+      const hasProj  = !!dimCols.pj && [...m.values()].some(a => a.projKgs);
       const caveats = [
         hasStock ? null : "the In Hand file carries no such column, so stock and DOH cannot be attributed",
         hasProj  ? null : "the Projection file carries no such column, so Projection Kgs is nil and Final DRR falls back to MTD"
@@ -1012,9 +1164,24 @@ async function exportExcel(){
       const first = pr;
       for (const [key, a] of rows){
         const x = pr;
-        pv.getRow(x).values = [key, a.skus.size,
-          hasStock ? a.fg : null, hasStock ? a.it : null, hasStock ? a.both : null,
-          hasProj ? a.projKgs : null, a.pend, a.disp, null, hasProj ? r.projDays : null, null, r.mtdDays, null, null, null, null];
+        pv.getRow(x).values = [key, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null];
+        const ih = dimCols.ih ? [[IHR(dimCols.ih), `$A${x}`]] : null;
+        const pj = dimCols.pj ? [[PJR(dimCols.pj), `$A${x}`]] : null;
+        const dp = dimCols.dp ? [[DPR(dimCols.dp), `$A${x}`]] : null;
+        pv.getCell(`B${x}`).value = {formula:
+          `COUNTIFS('Data - Group Keys'!$A$2:$A$${gkLast},"${name}",'Data - Group Keys'!$B$2:$B$${gkLast},$A${x})`};
+        if (ih){
+          pv.getCell(`C${x}`).value = {formula:fFG(x, ih)};
+          pv.getCell(`D${x}`).value = {formula:fIT(x, ih)};
+          pv.getCell(`E${x}`).value = {formula:`C${x}+D${x}`};
+        }
+        if (pj){
+          pv.getCell(`F${x}`).value = {formula:fPROJ(pj)};
+          pv.getCell(`J${x}`).value = {formula:projDaysF};
+        }
+        pv.getCell(`G${x}`).value = {formula:fPEND(dp)};
+        pv.getCell(`H${x}`).value = {formula:fDISP(dp)};
+        pv.getCell(`L${x}`).value = {formula:mtdDaysF};
         pv.getCell(`I${x}`).value = {formula:`G${x}+H${x}`};
         pv.getCell(`K${x}`).value = {formula:`IFERROR(F${x}/J${x},0)`};
         pv.getCell(`M${x}`).value = {formula:`IFERROR(I${x}/L${x},0)`};
@@ -1046,18 +1213,35 @@ async function exportExcel(){
     const ex = wb.addWorksheet("Exclusions");
     ex.columns = [{width:24},{width:60},{width:16},{width:40}];
     ex.getRow(1).values = ["Dataset","Raw label (unmapped)","Rows","Effect"]; headerRow(ex, 1);
+    const rawCol = {inhand:"A", projection:"A", dispatch:"A"};
+    const SHEET = {inhand:"Data - In Hand", projection:"Data - Projection", dispatch:"Data - Dispatch"};
+    const LAST  = {inhand:IH.last, projection:PJ.last, dispatch:DP.last};
+    const OKCOL  = {inhand:ihCol.ok, projection:pjCol.ok, dispatch:dpCol.ok};
+    const WHYCOL = {inhand:"M", projection:"M", dispatch:"R"};   // the column right after "Counted"
+    const rng = (dsk, c) => `'${SHEET[dsk]}'!$${c}$2:$${c}$${LAST[dsk]}`;
     let er = 2;
     for (const dsk of ["inhand","projection","dispatch"]){
-      for (const [label,count] of [...r.diag.unmapped[dsk].entries()].sort((a,b) => b[1]-a[1])){
-        ex.getRow(er++).values = [DS_LABEL[dsk], label, count, "Not mapped to a CFA — excluded from all figures"];
+      for (const [label] of [...r.diag.unmapped[dsk].entries()].sort((a,b) => b[1]-a[1])){
+        const row = ex.getRow(er);
+        row.values = [DS_LABEL[dsk], label, null, "Not mapped to a CFA — excluded from all figures"];
+        // "(blank)" is this app's label for an empty cell; match emptiness, not the label
+        const crit = label === "(blank)" ? '""' : `$B${er}`;
+        ex.getCell(`C${er}`).value = {formula:`COUNTIFS(${rng(dsk, rawCol[dsk])},${crit})`};
+        er++;
       }
     }
     er += 1;
     ex.getCell(`A${er}`).value = "Row counts"; ex.getCell(`A${er}`).font = {bold:true, color:{argb:BRAND}};
     er += 1;
     ex.getRow(er++).values = ["Dataset","Rows used","Dropped: not a CFA SKU",""];
-    for (const dsk of ["inhand","projection","dispatch"])
-      ex.getRow(er++).values = [DS_LABEL[dsk], r.diag.kept[dsk], r.diag.nonSku[dsk], dsk === "dispatch" && r.limitMonth ? `${r.outOfMonth} also dropped as outside the max month` : ""];
+    for (const dsk of ["inhand","projection","dispatch"]){
+      const row = er;
+      ex.getRow(row).values = [DS_LABEL[dsk], null, null,
+        dsk === "dispatch" && r.limitMonth ? `${r.outOfMonth} also dropped as outside the max month` : ""];
+      ex.getCell(`B${row}`).value = {formula:`COUNTIFS(${rng(dsk, OKCOL[dsk])},1)`};
+      ex.getCell(`C${row}`).value = {formula:`COUNTIFS(${rng(dsk, WHYCOL[dsk])},"not an active CFA SKU")`};
+      er++;
+    }
 
     /* ── Sheet 5: masters ── */
     const ms = wb.addWorksheet("Masters");

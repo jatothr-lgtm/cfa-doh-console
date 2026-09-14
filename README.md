@@ -158,9 +158,17 @@ Exclusions sheet of the export — never silently dropped.
 | Pivots | the same filtered rows grouped nine ways — warehouse, item group, MIS item group, item parent, item type, customer group, customer, shipping state, and warehouse × item group — summing FG, In Transit, IT + FG, Projection Kgs, Pendency, Dispatched and Pend + Disp, with both DRRs, Final DRR and DOH as live formulas on every row |
 | Exclusions | unmapped labels with row counts, plus rows-used / rows-dropped per dataset |
 | Masters | both masters as exported |
+| Data - In Hand / Projection / Dispatch | every input row with the app's include/exclude decision and the reason; these are the only values in the workbook |
+| Data - Group Keys | the (pivot, group, item code) triples the SKU-line counts are COUNTIFS'd over |
 
-Nothing on the DOH sheets is a hardcoded result — change a divisor in column F or K and the rows
-re-compute in Excel.
+**Every number on the report sheets is a formula.** The sums are `SUMIFS` over the three Data sheets,
+the SKU-line counts are `COUNTIFS` over Data - Group Keys, the rates and DOH are arithmetic on those,
+and the divisors are `DAY(EOMONTH(DATE(y,m,1),0))` and `DAY(MAX(Sales_Order_Date))`. The only values
+in the workbook are the input rows themselves, so any figure can be traced to the rows behind it by
+following the ranges or filtering the Data sheet. Edit a source row and the whole book re-computes.
+
+(A manual divisor override, or divisor rule 2, writes the resolved number instead — a distinct-date
+count across earlier months is not expressible as a single cell formula.)
 
 On the Pivots sheet, item group, MIS item group, item parent and item type travel with the item
 code, so in-hand stock is attributed to them and they carry a DOH. Customer, customer group and
