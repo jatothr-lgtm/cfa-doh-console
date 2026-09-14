@@ -124,13 +124,21 @@
         <input type="number" id="projDays" placeholder="auto" min="1" step="1">
         <small id="projDaysAuto">auto</small>
       </label>
-      <label>MTD divisor (day of max Sales_Order_Date)
+      <label>MTD divisor rule
+        <select id="mtdMode">
+          <option value="maxDay">Day-of-month of the max Sales_Order_Date</option>
+          <option value="plusPrior">That day + unique dates in earlier months</option>
+        </select>
+        <small id="mtdModeAuto">&nbsp;</small>
+      </label>
+      <label>MTD divisor override
         <input type="number" id="mtdDays" placeholder="auto" min="1" step="1">
         <small id="mtdDaysAuto">auto</small>
       </label>
       <label class="chk"><input type="checkbox" id="limitMonth" checked> Limit dispatch rows to the month of the max date</label>
     </div>
     <p class="note">Leave the divisors blank to use the values derived from the files. Any override is carried into the Excel export and the Logic tab.</p>
+    <p class="note" id="mtdModeNote"></p>
   </div>
 
   <div class="card">

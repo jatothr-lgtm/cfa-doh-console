@@ -120,7 +120,7 @@ const MONTHS = ["january","february","march","april","may","june","july","august
 const LS = "cfa_doh_v1";
 let state = {
   skus: null, wh: null,
-  bases: ["both"], vizBasis: "both", thRed: 15, thAmber: 30,
+  bases: ["both"], vizBasis: "both", mtdMode: "maxDay", thRed: 15, thAmber: 30,
   files: {inhand:null, projection:null, dispatch:null},
   result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL"
 };
@@ -137,6 +137,7 @@ function loadMasters(){
     else if (s.basis) state.bases = [s.basis];
     if (!state.bases.length) state.bases = ["both"];
     state.vizBasis = BASES.includes(s.vizBasis) ? s.vizBasis : state.bases[0];
+    if (s.mtdMode === "plusPrior" || s.mtdMode === "maxDay") state.mtdMode = s.mtdMode;
   }catch(e){
     state.skus = structuredClone(SEED_SKUS);
     state.wh   = structuredClone(SEED_WH);
@@ -146,7 +147,7 @@ function saveMasters(){
   try{
     localStorage.setItem(LS, JSON.stringify({
       skus:state.skus, wh:state.wh, thRed:state.thRed, thAmber:state.thAmber,
-      bases:state.bases, vizBasis:state.vizBasis
+      bases:state.bases, vizBasis:state.vizBasis, mtdMode:state.mtdMode
     }));
   }catch(e){ /* private window — masters stay in memory for this session */ }
 }
@@ -338,8 +339,28 @@ function compute(){
     dispRows.push({w, code, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)), d:parseDate(pick(r, aDi.date))});
   }
   const autoMtdDays = maxDate ? maxDate.getDate() : null;
+
+  // Alternate divisor: the max date's day-of-month PLUS one day for every distinct
+  // date that falls in a month other than the latest. A single-month file therefore
+  // adds nothing and lands back on the existing divisor.
+  const priorDates = new Set();
+  const monthsSeen = new Set();
+  if (maxDate){
+    for (const r of dispatch.rows){
+      const d = parseDate(pick(r, aDi.date));
+      if (!d) continue;
+      monthsSeen.add(d.getFullYear() * 100 + d.getMonth());
+      if (d.getMonth() !== maxDate.getMonth() || d.getFullYear() !== maxDate.getFullYear())
+        priorDates.add(ymd(d));
+    }
+  }
+  const priorDays = priorDates.size;
+  const altMtdDays = autoMtdDays == null ? null : autoMtdDays + priorDays;
+  const mtdMode = state.mtdMode === "plusPrior" ? "plusPrior" : "maxDay";
+  const modeDays = mtdMode === "plusPrior" ? altMtdDays : autoMtdDays;
+
   const ovMtd = num($("#mtdDays").value) || null;
-  const mtdDays = ovMtd || autoMtdDays || 1;
+  const mtdDays = ovMtd || modeDays || 1;
   let outOfMonth = 0;
   for (const x of dispRows){
     if (limitMonth && maxDate && x.d && (x.d.getMonth() !== maxDate.getMonth() || x.d.getFullYear() !== maxDate.getFullYear())){ outOfMonth++; continue; }
@@ -378,7 +399,8 @@ function compute(){
 
   state.result = {
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
-    mtdDays, autoMtdDays, ovMtd, maxDate, limitMonth, outOfMonth, diag,
+    mtdDays, autoMtdDays, altMtdDays, priorDays, mtdMode, monthsSpanned: monthsSeen.size,
+    ovMtd, maxDate, limitMonth, outOfMonth, diag,
     activeSkus: skuMap.size, generatedAt: new Date()
   };
   render();
@@ -393,10 +415,10 @@ function render(){
   $("#btnExport").disabled = !r;
   renderViz();
   if (!r) return;
-  renderKpis(r); renderWhTable(r); renderWhFilter(r); renderSkuTable(r); renderDiag(r);
+  renderKpis(r); renderWhTable(r); renderWhFilter(r); renderSkuTable(r); renderDiag(r); renderMtdSetting();
   $("#paramNote").textContent =
     `Basis: ${activeBases().map(b => BASIS_LABEL[b]).join(" · ")} · Projection divisor ${r.projDays} day(s) (${r.projMonthLabel}${r.ovProj?", manual override":""}) · ` +
-    `MTD divisor ${r.mtdDays} day(s)${r.maxDate?` (max Sales_Order_Date ${ymd(r.maxDate)})`:""}${r.ovMtd?", manual override":""} · ` +
+    `MTD divisor ${r.mtdDays} day(s)${r.maxDate?` (max Sales_Order_Date ${ymd(r.maxDate)}${r.mtdMode === "plusPrior" && r.priorDays ? ` + ${r.priorDays} earlier-month day(s)` : ""})`:""}${r.ovMtd?", manual override":""} · ` +
     `${r.activeSkus} active CFA SKUs.`;
 }
 
@@ -515,6 +537,26 @@ function renderDiag(r){
   $("#diag").innerHTML = block("In Hand","inhand") + block("Projection","projection") + block("Dispatches + Pendencies","dispatch");
 }
 
+function renderMtdSetting(){
+  const r = state.result;
+  $("#mtdMode").value = state.mtdMode;
+  const note = $("#mtdModeNote");
+  if (!r || !r.maxDate){ note.textContent = ""; $("#mtdDaysAuto").textContent = "auto"; return; }
+  const sum = `${r.autoMtdDays} + ${r.priorDays} = ${r.altMtdDays}`;
+  $("#mtdDaysAuto").textContent = `auto: ${r.mtdMode === "plusPrior" ? r.altMtdDays : r.autoMtdDays}`;
+  note.innerHTML = r.priorDays
+    ? `Max <code>Sales_Order_Date</code> is ${ymd(r.maxDate)} → <b>${r.autoMtdDays}</b>. The file also holds
+       <b>${r.priorDays}</b> distinct date(s) in ${r.monthsSpanned - 1} earlier month(s), so the second rule gives
+       <b>${sum}</b>. Currently using <b>${r.mtdDays}</b>${r.ovMtd ? " (manual override)" : ""}.`
+      + (r.mtdMode === "plusPrior" && r.limitMonth
+        ? `<br><span style="color:var(--red);font-weight:600">Heads up:</span> “Limit dispatch rows to the month of the max date”
+           is on, so the kilos above the line come from the latest month only while the divisor counts earlier days too.
+           Switch that off to keep numerator and divisor over the same period.`
+        : "")
+    : `Max <code>Sales_Order_Date</code> is ${ymd(r.maxDate)} → <b>${r.autoMtdDays}</b>. Every row falls in that one month,
+       so both rules give the same divisor${r.ovMtd ? `; manual override of ${r.ovMtd} is in force` : ""}.`;
+}
+
 function renderFileTable(){
   const rows = Object.entries(state.files).map(([ds,f]) => `<tr>
     <td>${DS_LABEL[ds]}</td>
@@ -581,7 +623,18 @@ In Transit      = Σ Balance Qty where stock type = In Transit</div>
 Dispatched = Σ Stock_qty    over rows where Pending Kgs = 0
 MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
   <p>Each row falls into <strong>one</strong> of the two, never both. A row that still has pending kilos counts as pendency; a row with none is fully delivered, so its <code>Stock_qty</code> is what actually went out. Counting both would double-count — in this feed <code>Stock_qty</code> equals <code>Pending Kgs</code> on every row that still has pending. Where a warehouse has no zero-pending row at all, Dispatched is <strong>nil</strong> and shows as “—”, not as a computed zero.</p>
-  <p>The divisor is the <strong>day-of-month of the maximum <code>Sales_Order_Date</code></strong> in the file${r && r.maxDate ? ` — ${ymd(r.maxDate)}, so ${r.autoMtdDays}${r.ovMtd ? `, manually overridden to ${r.ovMtd}` : ""}` : ""}. Dates arriving as text and as real dates are both parsed. No dispatch-status filter is applied: <code>Stock_qty</code> is taken as dispatched exactly as the Condition tab specifies.</p>
+  <p>Two divisor rules are available; the second was added alongside the first and neither changes any other figure:</p>
+  <ol>
+    <li><strong>Day-of-month of the maximum <code>Sales_Order_Date</code></strong> — the original rule, and the default.</li>
+    <li><strong>That same day plus one for every distinct date falling in an earlier month.</strong> Days with no orders in the
+        latest month still count, because month-to-date means days elapsed; earlier months contribute only the dates that
+        actually appear in the file. A file confined to one month adds nothing and lands back on rule 1.</li>
+  </ol>
+  ${r && r.maxDate ? `<p>On the loaded file the max date is <strong>${ymd(r.maxDate)}</strong> → ${r.autoMtdDays}${
+    r.priorDays ? `, and ${r.priorDays} distinct date(s) sit in ${r.monthsSpanned - 1} earlier month(s), so rule 2 gives ${r.autoMtdDays} + ${r.priorDays} = <strong>${r.altMtdDays}</strong>`
+                : `, and every row falls in that one month, so both rules give <strong>${r.autoMtdDays}</strong>`
+  }. In force: <strong>${r.mtdDays}</strong> day(s) — ${r.ovMtd ? "manual override" : r.mtdMode === "plusPrior" ? "rule 2" : "rule 1"}.</p>` : ""}
+  <p> Dates arriving as text and as real dates are both parsed. No dispatch-status filter is applied: <code>Stock_qty</code> is taken as dispatched exactly as the Condition tab specifies.</p>
 
   <h3>Condition 7 — Final DRR</h3>
   <div class="formula">Final DRR = MAX(Projection DRR, MTD DRR)</div>
@@ -789,7 +842,13 @@ async function exportExcel(){
     kv("One bucket per row", "A row counts as EITHER pendency OR dispatched, never both. A row with pending kilos left is pendency; a row with none is fully delivered, so its Stock_qty is the dispatched figure. Counting both would double-count — in this feed Stock_qty equals Pending Kgs on every row that still has pending.");
     kv("Nil vs zero", "Where a warehouse (or SKU) has no zero-pending row at all, the Dispatched cell is left EMPTY — nil, not a computed zero. Column J still adds correctly across an empty cell.");
     kv("Excel cells", "Warehouse DOH!J = H+I  (Pend + Disp)\nWarehouse DOH!L = IFERROR(J/K, 0)  (÷ MTD Days)", true);
-    kv("Divisor used", `${r.mtdDays} day(s)${r.maxDate ? ` — max Sales_Order_Date ${ymd(r.maxDate)}` : ""}${r.ovMtd ? " (manual override)" : ""}`);
+    kv("Divisor rule", [
+      "1. day-of-month of MAX(Sales_Order_Date)                       <- default",
+      "2. that day + count of distinct dates in earlier months",
+      "A single-month file gives the same answer either way."].join(String.fromCharCode(10)), true);
+    kv("Divisor used", `${r.mtdDays} day(s)${r.maxDate ? ` — max Sales_Order_Date ${ymd(r.maxDate)} gives ${r.autoMtdDays}` : ""}` +
+      (r.priorDays ? `; ${r.priorDays} distinct date(s) in ${r.monthsSpanned - 1} earlier month(s) would make rule 2 give ${r.altMtdDays}` : "; the file holds one month only, so both rules agree") +
+      `. In force: ${r.ovMtd ? "manual override" : r.mtdMode === "plusPrior" ? "rule 2" : "rule 1"}.`);
     kv("Row scope", r.limitMonth
       ? `Dispatch rows are limited to the month of the max date; ${fmt0(r.outOfMonth)} row(s) fell outside and were excluded.`
       : "All dispatch rows are included regardless of month.");
@@ -909,7 +968,7 @@ function showView(v){
 
 function init(){
   loadMasters();
-  $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber;
+  $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber; $("#mtdMode").value = state.mtdMode;
   syncBasisToggle();
   renderFileTable(); renderSkuMaster(); renderWhMaster(); vizInit(); renderViz();
   $("#logicBody").innerHTML = logicHtml(null);
@@ -950,6 +1009,7 @@ function init(){
 
   /* settings */
   ["#projDays","#mtdDays"].forEach(s => $(s).addEventListener("change", compute));
+  $("#mtdMode").addEventListener("change", e => { state.mtdMode = e.target.value; saveMasters(); compute(); });
   $("#limitMonth").addEventListener("change", compute);
 
   /* drilldown filters */

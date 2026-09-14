@@ -70,6 +70,26 @@ The MTD divisor is taken from the **whole dispatch column** before the CFA/SKU f
 warehouse divides by the same day — matching the worked example in the Condition tab
 (`2026-09-14` → 14).
 
+**Two divisor rules** are selectable on the Data tab; the first is the default and the second was
+added beside it without changing any other figure:
+
+1. `day-of-month of MAX(Sales_Order_Date)`
+2. `that day + one per distinct date falling in an earlier month`
+
+They are deliberately asymmetric. The latest month contributes its *day number* — days with no
+orders still count, because month-to-date means days elapsed. Earlier months contribute only the
+dates that actually appear in the file. A file confined to one month adds nothing and lands back on
+rule 1, which is why the reference workbook (all September 2026) gives 14 either way.
+
+Worked example — Sep 1–5 and 7–14, Aug 28/29/31, Jul 15/15/20:
+
+```
+14 (max date's day)  +  3 (Aug)  +  2 (Jul, the repeated 15th counts once)  =  19
+```
+
+If rule 2 is selected while *Limit dispatch rows to the month of the max date* is still ticked, the
+app warns: the kilos would come from one month while the divisor counts several.
+
 Both divisors can be overridden on the Data tab; an override is carried into the export and the
 Logic sheet.
 
