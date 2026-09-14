@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CFA DOH Console</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="mark">DOH</div>
+    <div>
+      <h1>CFA Warehouse DOH Console</h1>
+      <p class="sub">Days on hand by CFA — stock ÷ max(projection DRR, MTD DRR)</p>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab is-active" data-view="dashboard">Dashboard</button>
+    <button class="tab" data-view="upload">Data</button>
+    <button class="tab" data-view="skus">CFA SKU Master</button>
+    <button class="tab" data-view="wh">Warehouse Master</button>
+    <button class="tab" data-view="logic">Logic</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ══════════ DASHBOARD ══════════ -->
+<section class="view is-active" id="view-dashboard">
+
+  <div class="toolbar">
+    <div class="seg" id="basisToggle" role="group" aria-label="Stock basis">
+      <button class="seg-btn is-on" data-basis="both">In Transit + FG</button>
+      <button class="seg-btn" data-basis="fg">FG only</button>
+      <button class="seg-btn" data-basis="it">In Transit only</button>
+    </div>
+    <div class="spacer"></div>
+    <label class="mini">Red at DOH ≤ <input type="number" id="thRed" value="15" min="0" step="1"></label>
+    <label class="mini">Amber ≤ <input type="number" id="thAmber" value="30" min="0" step="1"></label>
+    <button class="btn btn-primary" id="btnExport" disabled>Export Excel</button>
+  </div>
+
+  <div id="emptyState" class="empty">
+    <div class="empty-art">▤</div>
+    <h2>No data loaded yet</h2>
+    <p>Upload the three source files — In Hand, Projection, and Dispatches plus Pendencies — to compute DOH.</p>
+    <button class="btn btn-primary" data-goto="upload">Go to Data</button>
+  </div>
+
+  <div id="results" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Warehouse summary</h2>
+        <div class="legend">
+          <span><i class="dot red"></i>Critical</span>
+          <span><i class="dot amber"></i>Watch</span>
+          <span><i class="dot green"></i>Healthy</span>
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table class="grid" id="whTable"></table>
+      </div>
+      <p class="note" id="paramNote"></p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>SKU drilldown</h2>
+        <div class="filters">
+          <select id="whFilter"></select>
+          <input type="search" id="skuSearch" placeholder="Search item code or name…">
+        </div>
+      </div>
+      <div class="tablewrap tall">
+        <table class="grid compact" id="skuTable"></table>
+      </div>
+    </div>
+
+    <div class="card" id="diagCard">
+      <div class="card-head"><h2>Data diagnostics</h2></div>
+      <div class="diag" id="diag"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ UPLOAD ══════════ -->
+<section class="view" id="view-upload">
+  <div class="drops">
+    <div class="drop" data-ds="inhand">
+      <h3>In Hand</h3>
+      <p class="hint">Needs <code>warehouse</code>, <code>item_code</code>, <code>Balance Qty</code></p>
+      <input type="file" accept=".xlsx,.xls,.csv" hidden>
+      <button class="btn">Choose file</button>
+      <div class="status">Not loaded</div>
+    </div>
+    <div class="drop" data-ds="projection">
+      <h3>Projection</h3>
+      <p class="hint">Needs <code>Wareouse</code>, <code>Item Code</code>, <code>Total KGs</code>, <code>Month</code>, <code>Year</code></p>
+      <input type="file" accept=".xlsx,.xls,.csv" hidden>
+      <button class="btn">Choose file</button>
+      <div class="status">Not loaded</div>
+    </div>
+    <div class="drop" data-ds="dispatch">
+      <h3>Dispatches + Pendencies</h3>
+      <p class="hint">Needs <code>Origin</code>, <code>Item_Code</code>, <code>Pending Kgs</code>, <code>Stock_qty</code>, <code>Sales_Order_Date</code></p>
+      <input type="file" accept=".xlsx,.xls,.csv" hidden>
+      <button class="btn">Choose file</button>
+      <div class="status">Not loaded</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Calculation settings</h2></div>
+    <div class="settings">
+      <label>Projection divisor (days in month)
+        <input type="number" id="projDays" placeholder="auto" min="1" step="1">
+        <small id="projDaysAuto">auto</small>
+      </label>
+      <label>MTD divisor (day of max Sales_Order_Date)
+        <input type="number" id="mtdDays" placeholder="auto" min="1" step="1">
+        <small id="mtdDaysAuto">auto</small>
+      </label>
+      <label class="chk"><input type="checkbox" id="limitMonth" checked> Limit dispatch rows to the month of the max date</label>
+    </div>
+    <p class="note">Leave the divisors blank to use the values derived from the files. Any override is carried into the Excel export and the Logic tab.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Loaded files</h2></div>
+    <div class="tablewrap"><table class="grid" id="fileTable"></table></div>
+  </div>
+</section>
+
+<!-- ══════════ SKU MASTER ══════════ -->
+<section class="view" id="view-skus">
+  <div class="card">
+    <div class="card-head">
+      <h2>CFA SKU Master <span class="pill" id="skuCount"></span></h2>
+      <div class="filters">
+        <input type="search" id="skuMasterSearch" placeholder="Search…">
+        <button class="btn" id="skuAdd">Add SKU</button>
+        <button class="btn" id="skuImport">Import CSV</button>
+        <button class="btn" id="skuExport">Export CSV</button>
+        <button class="btn btn-ghost" id="skuReset">Reset to workbook</button>
+      </div>
+    </div>
+    <p class="note">Only item codes marked active are included in every figure on the dashboard. Matching is trimmed and case-insensitive.</p>
+    <div class="tablewrap tall"><table class="grid" id="skuMaster"></table></div>
+  </div>
+</section>
+
+<!-- ══════════ WAREHOUSE MASTER ══════════ -->
+<section class="view" id="view-wh">
+  <div class="card">
+    <div class="card-head">
+      <h2>Warehouse Master <span class="pill" id="whCount"></span></h2>
+      <div class="filters">
+        <button class="btn" id="whAdd">Add mapping</button>
+        <button class="btn" id="whExport">Export CSV</button>
+        <button class="btn btn-ghost" id="whReset">Reset to workbook</button>
+      </div>
+    </div>
+    <p class="note">Every raw warehouse / origin label is mapped to a normalised CFA here. <strong>Stock type</strong> drives the FG vs In-Transit split and only applies to the In&nbsp;Hand dataset. Unmapped labels are never counted — they are listed under Data diagnostics.</p>
+    <div class="tablewrap"><table class="grid" id="whMaster"></table></div>
+  </div>
+</section>
+
+<!-- ══════════ LOGIC ══════════ -->
+<section class="view" id="view-logic">
+  <div class="card"><div class="card-head"><h2>Conditions &amp; math</h2></div>
+    <div class="logic" id="logicBody"></div>
+  </div>
+</section>
+
+</main>
+
+<div class="toast" id="toast" hidden></div>
+<input type="file" id="csvPicker" accept=".csv" hidden>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# Real Farmley data — never commit
+sample-data/
+*.xlsx
+*.xls
+*.csv
+
+# OS / editor noise
+Thumbs.db
+.DS_Store
+.vscode/

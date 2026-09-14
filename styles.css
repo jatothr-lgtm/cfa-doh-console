@@ -1,0 +1,203 @@
+:root{
+  --bg:#f4f6f4; --surface:#ffffff; --surface-2:#fafbfa;
+  --ink:#16241d; --ink-2:#5b6b63; --ink-3:#8b9992;
+  --line:#e2e7e3; --line-2:#eef1ef;
+  --brand:#17603f; --brand-2:#1f7d53; --brand-ink:#ffffff;
+  --red:#c0392f; --red-bg:#fdecea;
+  --amber:#b8791a; --amber-bg:#fdf3e2;
+  --green:#1f7d53; --green-bg:#e8f5ee;
+  --shadow:0 1px 2px rgba(16,32,25,.05), 0 8px 24px rgba(16,32,25,.06);
+  --radius:12px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1512; --surface:#161d19; --surface-2:#1b231e;
+    --ink:#e6eee9; --ink-2:#9fb0a7; --ink-3:#78887f;
+    --line:#26302a; --line-2:#202a24;
+    --brand:#2c9a68; --brand-2:#35b47b; --brand-ink:#07110c;
+    --red:#f07167; --red-bg:#3a1f1d;
+    --amber:#e0a850; --amber-bg:#3a2e1a;
+    --green:#4fc38c; --green-bg:#123026;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font:14px/1.5 "Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{margin:0; font-weight:650; letter-spacing:-.01em}
+code{font:12px/1.4 ui-monospace,"Cascadia Mono",Consolas,monospace; background:var(--line-2); padding:1px 5px; border-radius:4px}
+
+/* ── top bar ── */
+.topbar{
+  position:sticky; top:0; z-index:20; background:var(--surface);
+  border-bottom:1px solid var(--line); padding:14px 20px 0;
+  display:flex; flex-direction:column; gap:12px;
+}
+.brand{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+.mark{
+  width:38px;height:38px;border-radius:10px;background:var(--brand);color:var(--brand-ink);
+  display:grid;place-items:center;font-weight:750;font-size:12px;letter-spacing:.04em;flex:none;
+}
+.topbar h1{font-size:17px}
+.sub{margin:1px 0 0; color:var(--ink-2); font-size:12.5px}
+.tabs{display:flex; gap:2px; overflow-x:auto; scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  background:none;border:0;border-bottom:2px solid transparent;color:var(--ink-2);
+  padding:9px 13px;font:inherit;font-weight:550;cursor:pointer;white-space:nowrap;border-radius:6px 6px 0 0;
+}
+.tab:hover{color:var(--ink);background:var(--surface-2)}
+.tab.is-active{color:var(--brand);border-bottom-color:var(--brand)}
+
+main{padding:18px 20px 60px; max-width:1500px; margin:0 auto}
+.view{display:none}
+.view.is-active{display:block}
+
+/* ── controls ── */
+.btn{
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  padding:7px 13px; border-radius:8px; font:inherit; font-weight:550; cursor:pointer;
+}
+.btn:hover{border-color:var(--ink-3)}
+.btn-primary{background:var(--brand); border-color:var(--brand); color:var(--brand-ink)}
+.btn-primary:hover{background:var(--brand-2); border-color:var(--brand-2)}
+.btn-primary:disabled{opacity:.45; cursor:not-allowed}
+.btn-ghost{color:var(--ink-2)}
+.btn-sm{padding:3px 9px; font-size:12.5px; border-radius:6px}
+input[type=text],input[type=search],input[type=number],select{
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  padding:6px 9px; border-radius:8px; font:inherit; min-width:0;
+}
+input:focus,select:focus{outline:2px solid var(--brand); outline-offset:-1px; border-color:transparent}
+
+.toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:16px}
+.spacer{flex:1}
+.mini{font-size:12.5px; color:var(--ink-2); display:flex; align-items:center; gap:6px}
+.mini input{width:62px; padding:4px 7px}
+
+.seg{display:inline-flex; background:var(--line-2); padding:3px; border-radius:10px; gap:2px}
+.seg-btn{
+  border:0; background:none; color:var(--ink-2); font:inherit; font-weight:550;
+  padding:6px 14px; border-radius:8px; cursor:pointer;
+}
+.seg-btn.is-on{background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.12)}
+
+/* ── cards ── */
+.card{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow); padding:16px; margin-bottom:16px;
+}
+.card-head{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px}
+.card-head h2{font-size:15px}
+.filters{display:flex; gap:8px; flex-wrap:wrap}
+.note{color:var(--ink-2); font-size:12.5px; margin:10px 0 0}
+.pill{
+  display:inline-block; background:var(--line-2); color:var(--ink-2);
+  font-size:12px; font-weight:600; padding:1px 8px; border-radius:20px; margin-left:6px;
+}
+
+/* ── KPI ── */
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-bottom:16px}
+.kpi{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow); padding:16px 18px; position:relative; overflow:hidden;
+}
+.kpi::before{content:""; position:absolute; inset:0 auto 0 0; width:4px; background:var(--ink-3)}
+.kpi.red::before{background:var(--red)} .kpi.amber::before{background:var(--amber)} .kpi.green::before{background:var(--green)}
+.kpi h3{font-size:12.5px; color:var(--ink-2); font-weight:600; text-transform:uppercase; letter-spacing:.05em}
+.kpi .val{font-size:34px; font-weight:700; letter-spacing:-.02em; line-height:1.15; margin:6px 0 2px; font-variant-numeric:tabular-nums}
+.kpi.red .val{color:var(--red)} .kpi.amber .val{color:var(--amber)} .kpi.green .val{color:var(--green)}
+.kpi .meta{color:var(--ink-2); font-size:12.5px; display:flex; flex-wrap:wrap; gap:4px 12px}
+.kpi .meta b{font-weight:600; color:var(--ink)}
+
+/* ── tables ── */
+.tablewrap{overflow:auto; border:1px solid var(--line); border-radius:10px}
+.tablewrap.tall{max-height:460px}
+table.grid{border-collapse:separate; border-spacing:0; width:100%; font-variant-numeric:tabular-nums}
+.grid th,.grid td{padding:9px 11px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line-2)}
+.grid th{
+  position:sticky; top:0; z-index:2; background:var(--surface-2); color:var(--ink-2);
+  font-size:11.5px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);
+}
+.grid th:first-child,.grid td:first-child{text-align:left; position:sticky; left:0; background:var(--surface); z-index:1}
+.grid th:first-child{z-index:3; background:var(--surface-2)}
+.grid tbody tr:hover td{background:var(--surface-2)}
+.grid tbody tr:last-child td{border-bottom:0}
+.grid.compact th,.grid.compact td{padding:6px 10px; font-size:12.5px}
+.grid td.name{white-space:normal; min-width:240px; max-width:420px; text-align:left}
+.doh{font-weight:700; border-radius:6px; padding:3px 9px !important; display:inline-block; min-width:56px; text-align:center}
+.doh.red{background:var(--red-bg); color:var(--red)}
+.doh.amber{background:var(--amber-bg); color:var(--amber)}
+.doh.green{background:var(--green-bg); color:var(--green)}
+.tag{font-size:11px; font-weight:600; padding:2px 7px; border-radius:5px; background:var(--line-2); color:var(--ink-2)}
+.tag.proj{background:var(--green-bg); color:var(--green)}
+.tag.mtd{background:var(--amber-bg); color:var(--amber)}
+.grid td.grp{background:var(--surface-2); font-weight:650; text-align:left}
+
+/* ── upload ── */
+.drops{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; margin-bottom:16px}
+.drop{
+  background:var(--surface); border:1.5px dashed var(--line); border-radius:var(--radius);
+  padding:18px; text-align:center; transition:border-color .15s,background .15s;
+}
+.drop.over{border-color:var(--brand); background:var(--green-bg)}
+.drop.ok{border-style:solid; border-color:var(--green)}
+.drop h3{font-size:14px; margin-bottom:6px}
+.drop .hint{color:var(--ink-3); font-size:12px; margin:0 0 12px; line-height:1.7}
+.drop .status{margin-top:11px; font-size:12.5px; color:var(--ink-2)}
+.drop.ok .status{color:var(--green); font-weight:600}
+.drop.err .status{color:var(--red); font-weight:600}
+.settings{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; align-items:end}
+.settings label{display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--ink-2); font-weight:550}
+.settings small{color:var(--ink-3); font-size:11.5px; font-weight:400}
+.settings .chk{flex-direction:row; align-items:center; gap:8px}
+
+/* ── empty ── */
+.empty{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  padding:64px 24px; text-align:center; box-shadow:var(--shadow);
+}
+.empty-art{font-size:40px; color:var(--line); line-height:1}
+.empty h2{font-size:16px; margin:14px 0 6px}
+.empty p{color:var(--ink-2); margin:0 auto 18px; max-width:440px}
+
+/* ── diagnostics / legend ── */
+.legend{display:flex; gap:14px; font-size:12.5px; color:var(--ink-2)}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
+.dot.red{background:var(--red)} .dot.amber{background:var(--amber)} .dot.green{background:var(--green)}
+.diag{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px}
+.diag section{border:1px solid var(--line); border-radius:10px; padding:12px}
+.diag h4{margin:0 0 8px; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-2)}
+.diag ul{margin:0; padding-left:16px; color:var(--ink-2); font-size:12.5px}
+.diag li{margin-bottom:4px}
+.diag .good{color:var(--green); font-size:12.5px}
+
+/* ── logic ── */
+.logic{color:var(--ink-2); font-size:13.5px; line-height:1.65}
+.logic h3{color:var(--ink); font-size:14px; margin:20px 0 6px}
+.logic h3:first-child{margin-top:0}
+.logic p{margin:0 0 8px}
+.logic ol,.logic ul{margin:0 0 8px; padding-left:20px}
+.logic li{margin-bottom:5px}
+.logic .formula{
+  background:var(--surface-2); border:1px solid var(--line); border-left:3px solid var(--brand);
+  border-radius:8px; padding:10px 13px; margin:8px 0;
+  font:13px/1.7 ui-monospace,"Cascadia Mono",Consolas,monospace; color:var(--ink); white-space:pre-wrap;
+}
+
+/* ── toast ── */
+.toast{
+  position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+  background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:10px;
+  font-weight:550; z-index:50; box-shadow:var(--shadow); max-width:90vw;
+}
+.toast.bad{background:var(--red); color:#fff}
+
+@media (max-width:700px){
+  main{padding:14px 12px 50px}
+  .kpi .val{font-size:28px}
+  .toolbar{gap:8px}
+}
