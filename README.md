@@ -81,7 +81,7 @@ same state as the dashboard's, so the two never disagree.
 | | |
 |---|---|
 | Four stat tiles | critical SKU count, weakest warehouse, stock behind critical lines, SKUs selling with no stock |
-| **Critical SKUs** | every SKU line at or below the red threshold, worst first, with stock and DRR per row — the answer to "what is about to run out" |
+| **Critical SKUs** | every SKU line at or below the red threshold, worst first, labelled by item name, with stock and DRR per row — the answer to "what is about to run out". The item code stays in the hover tooltip and the table view. |
 | Cover against thresholds | a bullet track per warehouse with the red/amber/green bands drawn behind the bar |
 | Cover-band distribution | how many SKUs sit in each band |
 | Projection vs MTD DRR | which of the two sets the Final DRR, per warehouse |

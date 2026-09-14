@@ -83,14 +83,14 @@ function chartCritical(sl){
     : `No SKU is at or below ${state.thRed} days of cover on this slice.`;
   if (!rows.length) return {html: empty("Nothing critical here."), rows};
 
-  const html = `<div class="barlist${sl.multi ? " has-wh" : ""}">` + rows.map(s => {
+  const html = `<div class="barlist names${sl.multi ? " has-wh" : ""}">` + rows.map(s => {
     const pct = state.thRed > 0 ? Math.max((s.doh / state.thRed) * 100, 1.2) : 1.2;
     const t = tipId({title: `${s.code} — ${s.name}`, rows: [
       ["Warehouse", s.cfa], ["DOH", fmt(s.doh, 1) + " days"], ["Band", bandName(s.doh)],
       [BASIS_LABEL[state.vizBasis], fmt(s.sel) + " kg"], ["Final DRR", fmt(s.finalDRR) + " kg/day"], ["Driven by", s.drrSrc]
     ]});
     return `<div class="barrow" data-t="${t}" tabindex="0">
-      <span class="b-code">${svgEsc(s.code)}</span>
+      <span class="b-code" title="${svgEsc(s.name || s.code)}">${svgEsc(s.name || s.code)}</span>
       ${sl.multi ? `<span class="b-wh">${svgEsc(s.cfa)}</span>` : ""}
       <span class="b-track"><i class="b-fill red" style="width:${pct.toFixed(2)}%"></i></span>
       <span class="b-val">${fmt(s.doh, 1)}</span>
