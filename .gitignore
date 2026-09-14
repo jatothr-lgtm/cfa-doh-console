@@ -8,3 +8,6 @@ sample-data/
 Thumbs.db
 .DS_Store
 .vscode/
+
+# scratch
+.palette-check/
