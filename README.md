@@ -155,11 +155,19 @@ Exclusions sheet of the export — never silently dropped.
 | Warehouse DOH | one row per CFA; every derived column is a live formula over the raw sums; one DOH column per selected basis, each conditionally formatted; totals row |
 | SKU Drilldown | the same formulas per SKU, auto-filtered |
 | Logic & Conditions | every condition, its formula, the divisors actually used, the assumptions, and which Excel cell implements what |
+| Pivots | the same filtered rows grouped nine ways — warehouse, item group, MIS item group, item parent, item type, customer group, customer, shipping state, and warehouse × item group — summing FG, In Transit, IT + FG, Projection Kgs, Pendency, Dispatched and Pend + Disp, with both DRRs, Final DRR and DOH as live formulas on every row |
 | Exclusions | unmapped labels with row counts, plus rows-used / rows-dropped per dataset |
 | Masters | both masters as exported |
 
 Nothing on the DOH sheets is a hardcoded result — change a divisor in column F or K and the rows
 re-compute in Excel.
+
+On the Pivots sheet, item group, MIS item group, item parent and item type travel with the item
+code, so in-hand stock is attributed to them and they carry a DOH. Customer, customer group and
+shipping state belong to an order line rather than to stock, so those sections carry the flow
+measures only; shipping state is absent from the projection file as well, so it has no Projection
+Kgs. Each section header says which of these applies, and every section reconciles to the same
+totals as the warehouse sheet.
 
 ## Verified against the source workbook
 

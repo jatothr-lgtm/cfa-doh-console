@@ -113,6 +113,18 @@ const dohOf = (o, b) => o.finalDRR > 0 ? selOf(o, b) / o.finalDRR : null;
 const activeBases = () => BASES.filter(b => state.bases.includes(b));
 const primaryBasis = () => activeBases()[0] || "both";
 
+/* Dimensions the Pivots sheet groups by. `sku` means the value travels with the
+   item code, so in-hand stock can be attributed to it as well as the flows. */
+const PIVOT_DIMS = [
+  {key:"itemGroup",  label:"Item group",     sku:true,  proj:["Item Group"],    disp:["Item_Group","Item Group"]},
+  {key:"misGroup",   label:"MIS item group", sku:true,  proj:[],                disp:["New MIS ITEM Group"]},
+  {key:"itemParent", label:"Item parent",    sku:true,  proj:["Item Parent"],   disp:["item_parent","Item Parent"]},
+  {key:"itemType",   label:"Item type",      sku:true,  proj:["Item Type"],     disp:["Item_Type","Item Type"]},
+  {key:"custGroup",  label:"Customer group", sku:false, proj:["Customer Group"],disp:["customer_group","Customer Group"]},
+  {key:"customer",   label:"Customer",       sku:false, proj:["Customer"],      disp:["Customer"]},
+  {key:"state",      label:"Shipping state", sku:false, proj:null,              disp:["Shipping State"]}
+];
+
 const PEND_EPS = 1e-6;   // a float artefact must not hide a delivered line
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
 
@@ -275,6 +287,47 @@ function compute(){
     diag.unmapped[ds].set(k, (diag.unmapped[ds].get(k) || 0) + 1);
   };
 
+  /* ── pivot dimensions (additive: nothing below feeds the DOH figures) ──
+     SKU-attribute dims travel with the item code, so in-hand stock can be
+     attributed to them. Transaction dims belong to an order line, so stock
+     cannot — those pivots carry the flow measures only. */
+  const skuDim = new Map();                        // normalised code -> {dim: value}
+  const noteDim = (code, key, val) => {
+    const c = norm(code); if (!c) return;
+    const v = String(val ?? "").trim(); if (!v) return;
+    if (!skuDim.has(c)) skuDim.set(c, {});
+    const e = skuDim.get(c); if (!e[key]) e[key] = v;
+  };
+  for (const r of projection.rows){
+    const code = pick(r, ALIASES.projection.code);
+    PIVOT_DIMS.forEach(d => { if (d.sku && d.proj) noteDim(code, d.key, pick(r, d.proj)); });
+  }
+  for (const r of dispatch.rows){
+    const code = pick(r, ALIASES.dispatch.code);
+    PIVOT_DIMS.forEach(d => { if (d.sku && d.disp) noteDim(code, d.key, pick(r, d.disp)); });
+  }
+
+  const PV = new Map();                            // pivot name -> Map(key -> agg)
+  const pvAdd = (pivot, key, field, value, code) => {
+    const k = String(key ?? "").trim() || "(blank)";
+    if (!PV.has(pivot)) PV.set(pivot, new Map());
+    const m = PV.get(pivot);
+    if (!m.has(k)) m.set(k, {fg:0, it:0, both:0, projKgs:0, pend:0, disp:0, skus:new Set()});
+    const a = m.get(k);
+    a[field] += value;
+    if (code) a.skus.add(norm(code));
+  };
+  const dimOf = (code, key) => skuDim.get(norm(code))?.[key] || "(unmapped)";
+  // spread one measure across every pivot a row belongs to
+  const fanOut = (src, code, cfa, row, field, value) => {
+    pvAdd("Warehouse", cfa, field, value, code);
+    PIVOT_DIMS.forEach(d => {
+      if (d.sku) pvAdd(d.label, dimOf(code, d.key), field, value, code);
+      else if (src !== "inhand" && d[src]) pvAdd(d.label, pick(row, d[src]), field, value, code);
+    });
+    pvAdd("Warehouse x item group", `${cfa} — ${dimOf(code, "itemGroup")}`, field, value, code);
+  };
+
   /* Condition 4 — In Hand, split FG / In Transit */
   const aIn = ALIASES.inhand;
   for (const r of inhand.rows){
@@ -288,6 +341,8 @@ function compute(){
     if (w.type === "FG"){ bucket.fg += q; sku.fg += q; }
     else if (w.type === "In Transit"){ bucket.it += q; sku.it += q; }
     bucket.both += q; sku.both += q;
+    fanOut("inhand", code, w.cfa, r, w.type === "FG" ? "fg" : w.type === "In Transit" ? "it" : "both", q);
+    if (w.type === "FG" || w.type === "In Transit") fanOut("inhand", code, w.cfa, r, "both", q);
     diag.kept.inhand++;
   }
 
@@ -317,6 +372,7 @@ function compute(){
     const bucket = W.get(w.cfa); if (!bucket) continue;
     bucket.projKgs += q;
     rowFor(w.cfa, code, pick(r, aPr.name)).projKgs += q;
+    fanOut("proj", code, w.cfa, r, "projKgs", q);
     diag.kept.projection++;
   }
 
@@ -336,7 +392,7 @@ function compute(){
     const w = mDi.get(norm(raw));
     if (!w){ trackUnmapped("dispatch", raw); continue; }
     if (!isSku(code)){ diag.nonSku.dispatch++; continue; }
-    dispRows.push({w, code, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)), d:parseDate(pick(r, aDi.date))});
+    dispRows.push({w, code, row:r, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)), d:parseDate(pick(r, aDi.date))});
   }
   const autoMtdDays = maxDate ? maxDate.getDate() : null;
 
@@ -382,9 +438,11 @@ function compute(){
     // on every row that still has pending.
     if (x.pend > PEND_EPS){
       bucket.pend += x.pend; sku.pend += x.pend;
+      fanOut("disp", x.code, x.w.cfa, x.row, "pend", x.pend);
     } else {
       bucket.disp += x.disp; sku.disp += x.disp;
       bucket.dispRows++;     sku.dispRows++;
+      fanOut("disp", x.code, x.w.cfa, x.row, "disp", x.disp);
     }
     diag.kept.dispatch++;
   }
@@ -410,7 +468,7 @@ function compute(){
   state.result = {
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
     mtdDays, autoMtdDays, altMtdDays, priorDays, mtdMode, monthsSpanned: monthsSeen.size,
-    priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size,
+    priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size, pivots: PV,
     ovMtd, maxDate, limitMonth, outOfMonth, diag,
     activeSkus: skuMap.size, generatedAt: new Date()
   };
@@ -906,8 +964,83 @@ async function exportExcel(){
     kv("Dates", "Sales_Order_Date is parsed from text (YYYY-MM-DD or DD/MM/YYYY), real dates and Excel serials alike.");
     gap();
 
+    sec("Pivots sheet");
+    kv("What it is", "The same filtered rows as every other sheet, grouped a different way each time: by CFA warehouse, item group, MIS item group, item parent, item type, customer group, customer, shipping state, and warehouse x item group.");
+    kv("Measures", "FG, In Transit, IT + FG, Projection Kgs, Pendency, Dispatched and Pend + Disp are summed; Pend + Disp, both DRRs, Final DRR and DOH are live formulas on every row, using the same divisors as the rest of the workbook.");
+    kv("Stock attribution", "Item group, MIS item group, item parent and item type travel with the item code, so in-hand stock is attributed to them. Customer, customer group and shipping state belong to an order line rather than to stock, so those pivots carry the flow measures only and their stock and DOH cells are left empty. Shipping state is absent from the Projection file too, so that pivot has no Projection Kgs and its Final DRR is the MTD rate. Each section header states which of these apply.");
+    kv("DOH basis", `Computed on ${BASIS_LABEL[primaryBasis()]} — the first stock basis selected on the dashboard.`);
+    gap();
+
     sec("How to re-check a number by hand");
     kv("Any DOH cell", "Every cell in columns G, J, L, M, N, P and Q is a live formula over the raw sums in B–K. Change a divisor in F or K and the whole row re-computes — nothing on this sheet is a hardcoded result.", true);
+
+    /* ── Sheet 4: pivots ── */
+    const pv = wb.addWorksheet("Pivots", {views:[{state:"frozen", ySplit:2}]});
+    pv.columns = [{width:42},{width:10},{width:13},{width:13},{width:14},{width:14},{width:13},{width:13},
+                  {width:13},{width:9},{width:13},{width:9},{width:12},{width:12},{width:14},{width:12}];
+    pv.mergeCells("A1:P1");
+    pv.getCell("A1").value = "Pivots — every group-by over the same filtered rows as the rest of the workbook";
+    pv.getCell("A1").font = {bold:true, size:14, color:{argb:BRAND}};
+    const PHEAD = ["Group","SKU lines","FG (kg)","In Transit (kg)","IT + FG (kg)","Projection Kgs","Pendency Kgs",
+                   "Dispatched Kgs","Pend + Disp","Proj Days","Projection DRR","MTD Days","MTD DRR","Final DRR",
+                   `Selected Stock (${BASIS_LABEL[primaryBasis()]})`,"DOH (days)"];
+    const pStock = {both:"E", fg:"C", it:"D"}[primaryBasis()];
+
+    let pr = 3;
+    const pivotOrder = ["Warehouse", ...PIVOT_DIMS.map(d => d.label), "Warehouse x item group"];
+    for (const name of pivotOrder){
+      const m = r.pivots.get(name);
+      if (!m || !m.size) continue;
+      const hasStock = [...m.values()].some(a => a.both || a.fg || a.it);
+      const hasProj  = [...m.values()].some(a => a.projKgs);
+      const caveats = [
+        hasStock ? null : "the In Hand file carries no such column, so stock and DOH cannot be attributed",
+        hasProj  ? null : "the Projection file carries no such column, so Projection Kgs is nil and Final DRR falls back to MTD"
+      ].filter(Boolean);
+
+      pv.mergeCells(`A${pr}:P${pr}`);
+      pv.getCell(`A${pr}`).value = `Group by ${name.toLowerCase()}${caveats.length ? "  —  " + caveats.join("; ") : ""}`;
+      pv.getCell(`A${pr}`).font = {bold:true, size:11, color:{argb:BRAND}};
+      pv.getCell(`A${pr}`).fill = {type:"pattern", pattern:"solid", fgColor:{argb:HEADFILL}};
+      pr += 1;
+
+      pv.getRow(pr).values = PHEAD; headerRow(pv, pr);
+      pr += 1;
+
+      const rows = [...m.entries()].sort((a, b) =>
+        (b[1].pend + b[1].disp + b[1].projKgs) - (a[1].pend + a[1].disp + a[1].projKgs));
+      const first = pr;
+      for (const [key, a] of rows){
+        const x = pr;
+        pv.getRow(x).values = [key, a.skus.size,
+          hasStock ? a.fg : null, hasStock ? a.it : null, hasStock ? a.both : null,
+          hasProj ? a.projKgs : null, a.pend, a.disp, null, hasProj ? r.projDays : null, null, r.mtdDays, null, null, null, null];
+        pv.getCell(`I${x}`).value = {formula:`G${x}+H${x}`};
+        pv.getCell(`K${x}`).value = {formula:`IFERROR(F${x}/J${x},0)`};
+        pv.getCell(`M${x}`).value = {formula:`IFERROR(I${x}/L${x},0)`};
+        pv.getCell(`N${x}`).value = {formula:`MAX(K${x},M${x})`};
+        if (hasStock){
+          pv.getCell(`O${x}`).value = {formula:`${pStock}${x}`};
+          pv.getCell(`P${x}`).value = {formula:`IF($N${x}=0,"-",O${x}/$N${x})`};
+        }
+        ["C","D","E","F","G","H","I","K","M","N","O","P"].forEach(c => pv.getCell(`${c}${x}`).numFmt = N);
+        pr += 1;
+      }
+      const last = pr - 1;
+      pv.getCell(`A${pr}`).value = "Total";
+      pv.getCell(`A${pr}`).font = {bold:true};
+      ["C","D","E","F","G","H","I"].forEach(c => {
+        if (!hasStock && "CDE".includes(c)) return;
+        if (!hasProj && c === "F") return;
+        pv.getCell(`${c}${pr}`).value = {formula:`SUM(${c}${first}:${c}${last})`};
+        pv.getCell(`${c}${pr}`).numFmt = N;
+        pv.getCell(`${c}${pr}`).font = {bold:true};
+      });
+      pv.getRow(pr).border = {top:{style:"thin", color:{argb:BRAND}}};
+      if (hasStock && last >= first)
+        pv.addConditionalFormatting({ref:`P${first}:P${last}`, rules:bandRules()});
+      pr += 2;
+    }
 
     /* ── Sheet 4: exclusions ── */
     const ex = wb.addWorksheet("Exclusions");
