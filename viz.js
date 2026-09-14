@@ -252,24 +252,32 @@ function chartScatter(sl){
   return {svg: svg(W, H, g), pts};
 }
 
-/* ══════════ 7 · top SKUs by demand ══════════ */
+/* ══════════ 7 · red SKUs ranked by demand ══════════ */
+/* Same population as chart 1 — every SKU at or below the red threshold — but
+   ordered by how much demand it carries, so the biggest-volume shortages come
+   first. Chart 1 answers "what runs out soonest"; this answers "which of those
+   hurts most". */
 function chartDemand(sl){
-  const rows = sl.skus.filter(s => s.finalDRR > 0).sort((a, b) => b.finalDRR - a.finalDRR).slice(0, 15);
-  if (!rows.length) return {html: empty("No SKU has demand on this slice."), rows};
+  const rows = sl.skus
+    .filter(s => s.doh != null && s.doh <= state.thRed && s.finalDRR > 0)
+    .sort((a, b) => b.finalDRR - a.finalDRR);
+  $("#demandNote").textContent = rows.length
+    ? `${rows.length} red SKU line(s) with demand, heaviest first. Bars run 0 to ${fmt(rows[0].finalDRR, 0)} kg/day.`
+    : `No red SKU carries demand on this slice.`;
+  if (!rows.length) return {html: empty("Nothing red with demand here."), rows};
   const max = rows[0].finalDRR;
-  const html = `<div class="barlist${sl.multi ? " has-wh" : ""}">` + rows.map(s => {
+  const html = `<div class="barlist names${sl.multi ? " has-wh" : ""}">` + rows.map(s => {
     const pct = Math.max((s.finalDRR / max) * 100, 1.2);
     const t = tipId({title: `${s.code} — ${s.name}`, rows: [
       ["Warehouse", s.cfa], ["Final DRR", fmt(s.finalDRR) + " kg/day"], ["Driven by", s.drrSrc],
       [BASIS_LABEL[state.vizBasis], fmt(s.sel) + " kg"], ["DOH", fmt(s.doh, 1) + " days"], ["Band", bandName(s.doh)]
     ]});
-    const band = bandOf(s.doh);
     return `<div class="barrow" data-t="${t}" tabindex="0">
-      <span class="b-code">${svgEsc(s.code)}</span>
+      <span class="b-code" title="${svgEsc(s.name || s.code)}">${svgEsc(s.name || s.code)}</span>
       ${sl.multi ? `<span class="b-wh">${svgEsc(s.cfa)}</span>` : ""}
-      <span class="b-track"><i class="b-fill ${band}" style="width:${pct.toFixed(2)}%"></i></span>
+      <span class="b-track"><i class="b-fill red" style="width:${pct.toFixed(2)}%"></i></span>
       <span class="b-val">${fmt(s.finalDRR, 0)}</span>
-      <span class="b-note">${fmt(s.doh, 1)} d · ${svgEsc(bandName(s.doh))}</span>
+      <span class="b-note">${fmt(s.doh, 1)} d cover · ${fmt0(s.sel)} kg</span>
     </div>`;
   }).join("") + "</div>";
   return {html, rows};
@@ -349,10 +357,12 @@ function renderViz(){
 
   const dem = chartDemand(sl);
   $("#chart-demand").innerHTML = dem.html + `<div class="vizlegend">
-      <span><i class="lr"></i>Critical</span><span><i class="la"></i>Watch</span><span><i class="lg"></i>Healthy</span></div>`;
-  $("#table-demand").innerHTML = tbl(["Item Code","Item Name","Warehouse","Final DRR","Stock (kg)","DOH","Band"],
-    (dem.rows || []).map(s => [svgEsc(s.code), `<span class="name">${svgEsc(s.name)}</span>`, svgEsc(s.cfa),
-      fmt(s.finalDRR), fmt(s.sel), fmt(s.doh,1), bandName(s.doh)]));
+      <span><i class="lr"></i>All bars are critical SKUs — bar length is daily demand, not cover</span></div>`;
+  $("#table-demand").innerHTML = (dem.rows || []).length
+    ? tbl(["Item Code","Item Name","Warehouse","Final DRR","Stock (kg)","DOH","Band"],
+        dem.rows.map(s => [svgEsc(s.code), `<span class="name">${svgEsc(s.name)}</span>`, svgEsc(s.cfa),
+          fmt(s.finalDRR), fmt(s.sel), fmt(s.doh,1), bandName(s.doh)]))
+    : `<p class="vizempty">No red SKU carries demand on this slice.</p>`;
 }
 
 /* ── tooltip + view toggles ─────────────────────────────────── */

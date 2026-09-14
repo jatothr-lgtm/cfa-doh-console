@@ -87,7 +87,7 @@ same state as the dashboard's, so the two never disagree.
 | Projection vs MTD DRR | which of the two sets the Final DRR, per warehouse |
 | FG vs In Transit | what the basis toggle is choosing between |
 | Risk map | stock against daily demand, one dot per SKU, with constant-cover diagonals |
-| Top 15 by Final DRR | where the volume actually is, coloured by each SKU's own band |
+| **Red SKUs by daily demand** | the same red population as the critical list, but ranked by Final DRR — which of the shortages carries the most volume, so it gets chased first |
 
 Charts are hand-drawn SVG and HTML — no chart library, nothing fetched at runtime.
 
