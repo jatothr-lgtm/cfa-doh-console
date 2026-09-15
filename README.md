@@ -55,7 +55,7 @@ In Transit      = Σ Balance Qty  (In-Transit rows)
 Projection DRR  = Σ Total KGs ÷ calendar days in the projection month
 Pendency        = Σ Pending Kgs   over rows where Pending Kgs > 0
 Dispatched      = Σ Stock_qty    over rows where Pending Kgs = 0
-MTD DRR         = (Pendency + Dispatched) ÷ day-of-month of MAX(Sales_Order_Date)
+MTD DRR         = (Pendency + Dispatched) ÷ MTD divisor (see below)
 Final DRR       = MAX(Projection DRR, MTD DRR)
 DOH             = selected stock ÷ Final DRR
 ```
@@ -66,45 +66,34 @@ double-count — in this feed `Stock_qty` equals `Pending Kgs` on every row that
 Where a warehouse or SKU has no zero-pending row at all, Dispatched is **nil** (shown as "—", and
 left as an empty cell in the export), not a computed zero.
 
-The MTD divisor is taken from the **whole dispatch column** before the CFA/SKU filters, so every
-warehouse divides by the same day — matching the worked example in the Condition tab
-(`2026-09-14` → 14).
+### The MTD divisor
 
-**Two divisor rules** are selectable on the Data tab; the first is the default and the second was
-added beside it without changing any other figure:
+Three rules, selectable on the Data tab. All three read the **whole `Sales_Order_Date` column**
+before the CFA/SKU filters, so every warehouse divides by the same number.
 
-1. `day-of-month of MAX(Sales_Order_Date)`
-2. `that day + one per distinct earlier date that carries CFA pendency or dispatch`
+1. **Unique dates in `Sales_Order_Date`** — *the default*. How many distinct dates actually appear
+   in the column. A day the business took no order on never appears, so it never pads the divisor
+   and never flatters the daily rate.
+2. **Day-of-month of the max `Sales_Order_Date`** — days elapsed in the month whether or not each
+   one carried an order. This is the rule worked through in the Condition tab.
+3. **The max date's day + one per distinct earlier-month date carrying CFA movement.** An earlier
+   date earns its day only when at least one row on it is CFA-mapped, is an active CFA SKU, and has
+   `Pending Kgs` *or* `Stock_qty` — the date has to feed the numerator it will divide. A date
+   belonging only to a non-CFA SKU or origin, or carrying nothing in either column, adds nothing,
+   and a single-month file lands back on rule 2.
 
-They are deliberately asymmetric. The latest month contributes its *day number* — days with no
-orders still count, because month-to-date means days elapsed. An earlier date earns its day only
-when at least one row on it is **CFA-mapped, an active CFA SKU, and carries `Pending Kgs` or
-`Stock_qty`** — the date has to actually feed the numerator it will divide. A date belonging only to
-a non-CFA SKU or a non-CFA origin, or carrying nothing in either column, adds nothing. A file confined to one month adds nothing either, which is why the reference workbook (all
-September 2026) gives 14 under both rules.
+On the reference workbook: **13** unique dates (2026-09-06 carries no order), max date 2026-09-14 →
+**14**, and no earlier month, so rule 3 also gives 14. The Data tab spells out all three and names
+the one in force, and warns when a rule and the "limit to the max month" setting disagree about the
+period.
 
-Worked example — max date 2026-09-14, plus five earlier dates:
+Rules 1 and 2 export as live Excel formulas — the distinct count as
+`SUMPRODUCT((range<>"")/COUNTIF(range,range&""))`, verified against Excel itself. That expression
+scans the whole column, so it is evaluated in **one** cell (`Warehouse DOH!I3`) and every per-row
+divisor references it. Editing that one cell re-drives the whole workbook.
 
-| Earlier date | Row | Counts? |
-|---|---|---|
-| 2026-08-28 | CFA (BLR), CFA SKU, 5 kg pending | **yes** |
-| 2026-08-29 | CFA (BLR), CFA SKU, 7 kg dispatched | **yes** |
-| 2026-08-30 | CFA (BLR), CFA SKU, nothing in either column | no — feeds nothing |
-| 2026-08-31 | CFA (BLR), non-CFA SKU, pending | no — not a CFA SKU |
-| 2026-07-15 | Indore, CFA SKU, pending | no — not a CFA origin |
-| 2026-07-20 | CFA (GGN) pending + CFA (BLR) dispatched | **yes**, counted once |
-
-```
-14 (max date's day)  +  3 (qualifying earlier dates)  =  17
-```
-
-The Data tab lists which earlier dates qualified and how many were skipped.
-
-If rule 2 is selected while *Limit dispatch rows to the month of the max date* is still ticked, the
-app warns: the kilos would come from one month while the divisor counts several.
-
-Both divisors can be overridden on the Data tab; an override is carried into the export and the
-Logic sheet.
+Either divisor can also be overridden by hand on the Data tab; an override is carried into the
+export and the Logic sheet.
 
 ## Visualisation tab
 
