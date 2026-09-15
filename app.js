@@ -95,16 +95,30 @@ const SEED_WH = [
   {ds:"inhand",     raw:"Storage Beyond Sqfeet Gurgaon In Transit - CBSPL",       cfa:"CFA (GGN)", type:"In Transit", active:true},
   {ds:"projection", raw:"Storage Beyond Sqfeet Bangalore Finished Goods - CBSPL", cfa:"CFA (BLR)", type:"n/a",        active:true},
   {ds:"projection", raw:"Storage Beyond Sqfeet Gurgaon Finished Goods - CBSPL",   cfa:"CFA (GGN)", type:"n/a",        active:true},
-  {ds:"dispatch",   raw:"CFA (BLR)",                                              cfa:"CFA (BLR)", type:"n/a",        active:true},
-  {ds:"dispatch",   raw:"CFA (GGN)",                                              cfa:"CFA (GGN)", type:"n/a",        active:true}
+  {ds:"pendency",   raw:"CFA (BLR)",                                              cfa:"CFA (BLR)", type:"n/a",        active:true},
+  {ds:"pendency",   raw:"CFA (GGN)",                                              cfa:"CFA (GGN)", type:"n/a",        active:true},
+  {ds:"invoice",    raw:"Storage Beyond Sqfeet Bangalore Finished Goods - CBSPL", cfa:"CFA (BLR)", type:"n/a",        active:true},
+  {ds:"invoice",    raw:"Storage Beyond Sqfeet Gurgaon Finished Goods - CBSPL",   cfa:"CFA (GGN)", type:"n/a",        active:true}
 ];
 
 const ALIASES = {
   inhand:     {wh:["warehouse","Warehouse","Wareouse"], code:["item_code","Item Code","Item_Code"], name:["item_name","Item Name","Item_Name"], qty:["Balance Qty"]},
   projection: {wh:["Wareouse","warehouse","Warehouse"], code:["Item Code","item_code","Item_Code"], name:["Item Name","item_name","Item_Name"], qty:["Total KGs"], month:["Month"], year:["Year"]},
-  dispatch:   {wh:["Origin"], code:["Item_Code","Item Code","item_code"], name:["Item_Name","Item Name","item_name"], pend:["Pending Kgs"], disp:["Stock_qty"], date:["Sales_Order_Date"]}
+  /* File 3 is pendency ONLY — Stock_qty here is deliberately not read: on every row
+     that still has pending kilos it simply repeats Pending Kgs, and the dispatched
+     figure now comes from the sales-invoice file instead. */
+  pendency:   {wh:["Origin"], code:["Item_Code","Item Code","item_code"], name:["Item_Name","Item Name","item_name"], pend:["Pending Kgs"], date:["Sales_Order_Date"]},
+  /* File 4 — the sales-invoice extract. The CFA is `From Warehouse`, the kilos are
+     `Stock Qty In Kg`, and returns / sample orders are dropped before summing. */
+  invoice:    {wh:["From Warehouse"], code:["Item Code","Item_Code","item_code"], name:["Item Name","Item_Name","item_name"],
+               qty:["Stock Qty In Kg"], date:["Invoice Date"], status:["Invoice Status"],
+               customer:["Customer"], retAgainst:["Return Against"]}
 };
-const DS_LABEL = {inhand:"In Hand", projection:"Projection", dispatch:"Dispatches + Pendencies"};
+const DS_LABEL = {inhand:"In Hand", projection:"Projection", pendency:"Pendencies", invoice:"Dispatches (sales invoice)"};
+const DS_KEYS  = ["inhand", "projection", "pendency", "invoice"];
+/* Rows the invoice file drops before anything is summed. */
+const INV_RETURN_STATUS = "return";
+const INV_CUSTOMER_BLOCK = "sample order";
 const BASES = ["both", "fg", "it"];
 const BASIS_LABEL = {both:"In Transit + FG", fg:"FG only", it:"In Transit only"};
 const selOf = (o, b) => b === "both" ? o.both : b === "fg" ? o.fg : o.it;
@@ -116,18 +130,18 @@ const primaryBasis = () => activeBases()[0] || "both";
 /* Dimensions the Pivots sheet groups by. `sku` means the value travels with the
    item code, so in-hand stock can be attributed to it as well as the flows. */
 const PIVOT_DIMS = [
-  {key:"itemGroup",  label:"Item group",     sku:true,  proj:["Item Group"],    disp:["Item_Group","Item Group"]},
-  {key:"misGroup",   label:"MIS item group", sku:true,  proj:[],                disp:["New MIS ITEM Group"]},
-  {key:"itemParent", label:"Item parent",    sku:true,  proj:["Item Parent"],   disp:["item_parent","Item Parent"]},
-  {key:"itemType",   label:"Item type",      sku:true,  proj:["Item Type"],     disp:["Item_Type","Item Type"]},
-  {key:"custGroup",  label:"Customer group", sku:false, proj:["Customer Group"],disp:["customer_group","Customer Group"]},
-  {key:"customer",   label:"Customer",       sku:false, proj:["Customer"],      disp:["Customer"]},
-  {key:"state",      label:"Shipping state", sku:false, proj:null,              disp:["Shipping State"]}
+  {key:"itemGroup",  label:"Item group",     sku:true,  proj:["Item Group"],    disp:["Item_Group","Item Group"],          inv:["Item Group"]},
+  {key:"misGroup",   label:"MIS item group", sku:true,  proj:[],                disp:["New MIS ITEM Group"],               inv:["New Mis Item Group","MIS Item Group"]},
+  {key:"itemParent", label:"Item parent",    sku:true,  proj:["Item Parent"],   disp:["item_parent","Item Parent"],        inv:["Item Parent"]},
+  {key:"itemType",   label:"Item type",      sku:true,  proj:["Item Type"],     disp:["Item_Type","Item Type"],            inv:["Product Type"]},
+  {key:"custGroup",  label:"Customer group", sku:false, proj:["Customer Group"],disp:["customer_group","Customer Group"],  inv:["Sales Channel"]},
+  {key:"customer",   label:"Customer",       sku:false, proj:["Customer"],      disp:["Customer"],                         inv:["Customer"]},
+  {key:"state",      label:"Shipping state", sku:false, proj:null,              disp:["Shipping State"],                   inv:["Supply Location"]}
 ];
 
 const MTD_MODES = ["uniqueDates", "maxDay", "plusPrior"];
 const MTD_MODE_LABEL = {
-  uniqueDates: "Unique dates in Sales_Order_Date",
+  uniqueDates: "Unique dates across both flow files",
   maxDay:      "Day-of-month of the max Sales_Order_Date",
   plusPrior:   "Max date's day + unique dates in earlier months"
 };
@@ -139,7 +153,7 @@ const LS = "cfa_doh_v1";
 let state = {
   skus: null, wh: null,
   bases: ["both"], vizBasis: "both", mtdMode: "uniqueDates", thRed: 15, thAmber: 30,
-  files: {inhand:null, projection:null, dispatch:null},
+  files: {inhand:null, projection:null, pendency:null, invoice:null},
   result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL"
 };
 
@@ -148,6 +162,12 @@ function loadMasters(){
     const s = JSON.parse(localStorage.getItem(LS) || "{}");
     state.skus = Array.isArray(s.skus) && s.skus.length ? s.skus : structuredClone(SEED_SKUS);
     state.wh   = Array.isArray(s.wh)   && s.wh.length   ? s.wh   : structuredClone(SEED_WH);
+    // Migrate masters saved before the dispatch file was split in two: the old
+    // "dispatch" dataset was the Origin-keyed pendency file, and the invoice
+    // mappings did not exist yet.
+    state.wh.forEach(w => { if (w.ds === "dispatch") w.ds = "pendency"; });
+    if (!state.wh.some(w => w.ds === "invoice"))
+      state.wh.push(...SEED_WH.filter(w => w.ds === "invoice").map(w => ({...w})));
     if (s.thRed != null) state.thRed = s.thRed;
     if (s.thAmber != null) state.thAmber = s.thAmber;
     // migrate the old single-basis setting
@@ -170,6 +190,52 @@ function saveMasters(){
   }catch(e){ /* private window — masters stay in memory for this session */ }
 }
 
+/* ── the projection file is kept across sessions ─────────────
+   It changes once a month, so it is stored rather than re-uploaded every
+   time. IndexedDB rather than localStorage: a projection spanning several
+   months would not fit the 5 MB cap. Per browser, per machine — there is no
+   backend, so a colleague opening the link starts with an empty slot. */
+const PDB = {name:"cfa_doh", store:"files", key:"projection"};
+function idb(){
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(PDB.name, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(PDB.store);
+    req.onsuccess = () => res(req.result);
+    req.onerror   = () => rej(req.error);
+  });
+}
+async function keepProjection(parsed){
+  try{
+    const db = await idb();
+    await new Promise((res, rej) => {
+      const t = db.transaction(PDB.store, "readwrite");
+      t.objectStore(PDB.store).put({...parsed, savedAt: Date.now()}, PDB.key);
+      t.oncomplete = res; t.onerror = () => rej(t.error);
+    });
+  }catch(e){ /* storage blocked — the file still works for this session */ }
+}
+async function loadKeptProjection(){
+  try{
+    const db = await idb();
+    return await new Promise((res, rej) => {
+      const t = db.transaction(PDB.store, "readonly");
+      const q = t.objectStore(PDB.store).get(PDB.key);
+      q.onsuccess = () => res(q.result || null);
+      q.onerror   = () => rej(q.error);
+    });
+  }catch(e){ return null; }
+}
+async function forgetProjection(){
+  try{
+    const db = await idb();
+    await new Promise(res => {
+      const t = db.transaction(PDB.store, "readwrite");
+      t.objectStore(PDB.store).delete(PDB.key);
+      t.oncomplete = res; t.onerror = res;
+    });
+  }catch(e){ /* nothing kept */ }
+}
+
 /* ── helpers ───────────────────────────────────────────────── */
 const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -188,10 +254,18 @@ function pick(row, names){ for (const n of names) if (n in row) return row[n]; r
 function hasCol(headers, names){ return names.some(n => headers.includes(n)); }
 
 function parseDate(v){
-  if (v instanceof Date && !isNaN(v)) return v;
-  if (typeof v === "number"){ // excel serial
-    const d = new Date(Date.UTC(1899,11,30) + v*86400000);
-    return isNaN(d) ? null : d;
+  if (v instanceof Date && !isNaN(v)){
+    // SheetJS reconstructs a date-only cell with a small negative drift — a cell
+    // holding 2026-09-01 comes back as 2026-08-31 23:59:50 — which silently moves
+    // the row to the previous day, and with it the divisor and the month filter.
+    // Anything within a minute of the next midnight belongs to that next day.
+    const d = new Date(v.getTime());
+    if (d.getHours() === 23 && d.getMinutes() === 59 && d.getSeconds() >= 30) d.setTime(d.getTime() + 60000);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+  if (typeof v === "number"){ // excel serial — read back in UTC, rebuilt as a local date
+    const t = new Date(Date.UTC(1899,11,30) + Math.round(v * 86400000));
+    return isNaN(t) ? null : new Date(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());
   }
   const s = String(v ?? "").trim();
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -225,14 +299,29 @@ function readFile(file){
   });
 }
 function detectDataset(headers){
-  if (hasCol(headers, ALIASES.dispatch.pend) && hasCol(headers, ALIASES.dispatch.disp)) return "dispatch";
+  if (hasCol(headers, ALIASES.invoice.qty) && hasCol(headers, ALIASES.invoice.wh)) return "invoice";
+  if (hasCol(headers, ALIASES.pendency.pend)) return "pendency";
   if (hasCol(headers, ALIASES.projection.qty)) return "projection";
   if (hasCol(headers, ALIASES.inhand.qty)) return "inhand";
   return null;
 }
 function requiredCols(ds){
   const a = ALIASES[ds];
-  return ds === "dispatch" ? [a.wh,a.code,a.pend,a.disp,a.date] : ds === "projection" ? [a.wh,a.code,a.qty] : [a.wh,a.code,a.qty];
+  return ds === "pendency" ? [a.wh,a.code,a.pend,a.date]
+       : ds === "invoice"  ? [a.wh,a.code,a.qty,a.date,a.status,a.customer]
+       : [a.wh,a.code,a.qty];
+}
+
+function markLoaded(ds, parsed){
+  const drop = $(`.drop[data-ds="${ds}"]`);
+  if (!drop) return;
+  drop.classList.add("ok");
+  const kept = ds === "projection" && parsed.savedAt
+    ? ` · kept from ${new Date(parsed.savedAt).toLocaleDateString("en-IN")}` : "";
+  drop.querySelector(".status").textContent =
+    `${parsed.name} · ${parsed.rows.length.toLocaleString("en-IN")} rows${kept}`;
+  const clear = $("#clearProjection");
+  if (ds === "projection" && clear) clear.hidden = false;
 }
 
 async function handleFile(ds, file){
@@ -250,8 +339,9 @@ async function handleFile(ds, file){
     const detected = detectDataset(parsed.headers);
     if (detected && detected !== ds) toast(`Heads up — that file looks like "${DS_LABEL[detected]}", loaded as "${DS_LABEL[ds]}".`, true);
     state.files[ds] = parsed;
+    if (ds === "projection") await keepProjection(parsed);
     drop.classList.add("ok");
-    drop.querySelector(".status").textContent = `${parsed.name} · ${parsed.rows.length.toLocaleString("en-IN")} rows`;
+    markLoaded(ds, parsed);
     compute(); renderFileTable();
   }catch(err){
     drop.classList.add("err");
@@ -261,8 +351,8 @@ async function handleFile(ds, file){
 
 /* ── computation (Condition tab rules 2–8) ─────────────────── */
 function compute(){
-  const {inhand, projection, dispatch} = state.files;
-  if (!inhand || !projection || !dispatch){ state.result = null; render(); return; }
+  const {inhand, projection, pendency, invoice} = state.files;
+  if (!inhand || !projection || !pendency || !invoice){ state.result = null; render(); return; }
 
   const skuMap = new Map(state.skus.filter(s => s.active).map(s => [norm(s.code), s]));
   const isSku  = c => skuMap.has(norm(c));
@@ -271,7 +361,7 @@ function compute(){
     state.wh.filter(w => w.active && w.ds === ds).forEach(w => m.set(norm(w.raw), w));
     return m;
   };
-  const mIn = mapFor("inhand"), mPr = mapFor("projection"), mDi = mapFor("dispatch");
+  const mIn = mapFor("inhand"), mPr = mapFor("projection"), mDi = mapFor("pendency"), mIv = mapFor("invoice");
 
   const cfas = [...new Set(state.wh.filter(w => w.active).map(w => w.cfa))].sort();
   const blank = () => ({fg:0, it:0, both:0, projKgs:0, pend:0, disp:0, dispRows:0});
@@ -284,9 +374,9 @@ function compute(){
   };
 
   const diag = {
-    unmapped:{inhand:new Map(), projection:new Map(), dispatch:new Map()},
-    nonSku:{inhand:0, projection:0, dispatch:0},
-    kept:{inhand:0, projection:0, dispatch:0}
+    unmapped:{inhand:new Map(), projection:new Map(), pendency:new Map(), invoice:new Map()},
+    nonSku:{inhand:0, projection:0, pendency:0, invoice:0},
+    kept:{inhand:0, projection:0, pendency:0, invoice:0}
   };
   const trackUnmapped = (ds, raw) => {
     const k = String(raw ?? "(blank)").trim() || "(blank)";
@@ -308,15 +398,15 @@ function compute(){
     const code = pick(r, ALIASES.projection.code);
     PIVOT_DIMS.forEach(d => { if (d.sku && d.proj) noteDim(code, d.key, pick(r, d.proj)); });
   }
-  for (const r of dispatch.rows){
-    const code = pick(r, ALIASES.dispatch.code);
+  for (const r of pendency.rows){
+    const code = pick(r, ALIASES.pendency.code);
     PIVOT_DIMS.forEach(d => { if (d.sku && d.disp) noteDim(code, d.key, pick(r, d.disp)); });
   }
 
   /* Every input row, flagged with whether it counted and why not. The export
      writes these to data sheets and drives every number off them with SUMIFS,
      so no figure in the workbook is a value typed in by this app. */
-  const DR = {inhand:[], projection:[], dispatch:[]};
+  const DR = {inhand:[], projection:[], pendency:[], invoice:[]};
   const dimsOf = code => {
     const e = skuDim.get(norm(code)) || {};
     return {itemGroup:e.itemGroup || "(unmapped)", misGroup:e.misGroup || "(unmapped)",
@@ -406,33 +496,33 @@ function compute(){
   }
 
   /* Condition 6 — Pendency + dispatch MTD DRR */
-  const aDi = ALIASES.dispatch;
+  const aDi = ALIASES.pendency, aIv = ALIASES.invoice;
   const limitMonth = $("#limitMonth").checked;
   // Condition 6: the divisor is the max Sales_Order_Date of the COLUMN — i.e. across the
   // whole file, before the CFA / SKU filters — so every warehouse divides by the same day.
   let maxDate = null;
-  for (const r of dispatch.rows){
+  for (const r of pendency.rows){
     const d = parseDate(pick(r, aDi.date));
     if (d && (!maxDate || d > maxDate)) maxDate = d;
   }
   const dispRows = [];
   const dispPush = (r, cfa, ok, why, bucket) => {
     const code = pick(r, aDi.code), dm = dimsOf(code);
-    DR.dispatch.push({raw:String(pick(r, aDi.wh) ?? ""), cfa, code:String(code ?? "").trim(),
+    DR.pendency.push({raw:String(pick(r, aDi.wh) ?? ""), cfa, code:String(code ?? "").trim(),
       name:String(pick(r, aDi.name) ?? ""), ...dm,
       custGroup:String(pick(r, ["customer_group","Customer Group"]) ?? ""),
       customer:String(pick(r, ["Customer"]) ?? ""),
       state:String(pick(r, ["Shipping State"]) ?? ""),
       date:parseDate(pick(r, aDi.date)),
-      pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)),
+      pend:num(pick(r, aDi.pend)),
       bucket, ok, why, whGroup:`${cfa} — ${dm.itemGroup}`});
   };
-  for (const r of dispatch.rows){
+  for (const r of pendency.rows){
     const raw = pick(r, aDi.wh), code = pick(r, aDi.code);
     const w = mDi.get(norm(raw));
-    if (!w){ trackUnmapped("dispatch", raw); dispPush(r, "", 0, "origin not mapped to a CFA", ""); continue; }
-    if (!isSku(code)){ diag.nonSku.dispatch++; dispPush(r, w.cfa, 0, "not an active CFA SKU", ""); continue; }
-    dispRows.push({w, code, row:r, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), disp:num(pick(r, aDi.disp)), d:parseDate(pick(r, aDi.date))});
+    if (!w){ trackUnmapped("pendency", raw); dispPush(r, "", 0, "origin not mapped to a CFA", ""); continue; }
+    if (!isSku(code)){ diag.nonSku.pendency++; dispPush(r, w.cfa, 0, "not an active CFA SKU", ""); continue; }
+    dispRows.push({w, code, row:r, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), d:parseDate(pick(r, aDi.date))});
   }
   const autoMtdDays = maxDate ? maxDate.getDate() : null;
 
@@ -447,15 +537,14 @@ function compute(){
   const priorSkipped = new Set();     // earlier dates seen but carrying neither
   const monthsSeen = new Set();
   if (maxDate){
-    for (const r of dispatch.rows){
+    for (const r of pendency.rows){
       const d = parseDate(pick(r, aDi.date));
       if (!d) continue;
       monthsSeen.add(d.getFullYear() * 100 + d.getMonth());
       if (d.getMonth() === maxDate.getMonth() && d.getFullYear() === maxDate.getFullYear()) continue;
       const key = ymd(d);
       const w = mDi.get(norm(pick(r, aDi.wh)));
-      const qualifies = !!w && isSku(pick(r, aDi.code)) &&
-                        (num(pick(r, aDi.pend)) > PEND_EPS || num(pick(r, aDi.disp)) > PEND_EPS);
+      const qualifies = !!w && isSku(pick(r, aDi.code)) && num(pick(r, aDi.pend)) > PEND_EPS;
       if (qualifies) priorDates.add(key); else priorSkipped.add(key);
     }
     priorSkipped.forEach(k => { if (priorDates.has(k)) priorSkipped.delete(k); });
@@ -468,11 +557,19 @@ function compute(){
   // max date is — so every warehouse divides by the same number. A day the business
   // did not trade on never appears in the column and so never inflates the divisor.
   const allDates = new Set();
-  for (const r of dispatch.rows){
+  for (const r of pendency.rows){
     const d = parseDate(pick(r, aDi.date));
     if (d) allDates.add(ymd(d));
   }
+  // The numerator now draws on two files, so the divisor covers both calendars:
+  // Sales_Order_Date from the pendency file and Invoice Date from the invoice file.
+  const pendDateDays = allDates.size;
+  for (const r of invoice.rows){
+    const d = parseDate(pick(r, aIv.date));
+    if (d) allDates.add(ymd(d));
+  }
   const uniqueDateDays = allDates.size || null;
+  const invDateDays = uniqueDateDays - pendDateDays;
 
   const mtdMode = MTD_MODES.includes(state.mtdMode) ? state.mtdMode : "uniqueDates";
   const modeDays = mtdMode === "plusPrior" ? altMtdDays
@@ -481,28 +578,66 @@ function compute(){
 
   const ovMtd = num($("#mtdDays").value) || null;
   const mtdDays = ovMtd || modeDays || 1;
-  let outOfMonth = 0;
+  let outOfMonth = 0, zeroPend = 0;
   for (const x of dispRows){
     if (limitMonth && maxDate && x.d && (x.d.getMonth() !== maxDate.getMonth() || x.d.getFullYear() !== maxDate.getFullYear())){
       outOfMonth++; dispPush(x.row, x.w.cfa, 0, "outside the month of the max date", ""); continue;
     }
     const bucket = W.get(x.w.cfa); if (!bucket) continue;
+    // Pendency only. A row with no pending kilos left contributes nothing here —
+    // what actually went out is counted from the sales-invoice file below.
+    if (x.pend <= PEND_EPS){ zeroPend++; dispPush(x.row, x.w.cfa, 0, "nothing pending on this row", ""); continue; }
     const sku = rowFor(x.w.cfa, x.code, x.name);
-    // Each row lands in exactly one bucket. A row with pending kilos is Pending;
-    // a row with none is fully delivered, so its Stock_qty is the Dispatched figure.
-    // Counting both would double-count: in this feed Stock_qty equals Pending Kgs
-    // on every row that still has pending.
-    if (x.pend > PEND_EPS){
-      bucket.pend += x.pend; sku.pend += x.pend;
-      fanOut("disp", x.code, x.w.cfa, x.row, "pend", x.pend);
-      dispPush(x.row, x.w.cfa, 1, "", "Pendency");
-    } else {
-      bucket.disp += x.disp; sku.disp += x.disp;
-      bucket.dispRows++;     sku.dispRows++;
-      fanOut("disp", x.code, x.w.cfa, x.row, "disp", x.disp);
-      dispPush(x.row, x.w.cfa, 1, "", "Dispatched");
+    bucket.pend += x.pend; sku.pend += x.pend;
+    fanOut("disp", x.code, x.w.cfa, x.row, "pend", x.pend);
+    dispPush(x.row, x.w.cfa, 1, "", "Pendency");
+    diag.kept.pendency++;
+  }
+
+  /* ── Dispatched — from the sales-invoice file ──────────────────────────
+     Warehouse is `From Warehouse`, kilos are `Stock Qty In Kg`. Returns and
+     sample orders are dropped before anything is summed. */
+  let invReturns = 0, invSamples = 0, invOutOfMonth = 0, invRetAgainst = 0;
+  let invMaxDate = null;
+  for (const r of invoice.rows){
+    const d = parseDate(pick(r, aIv.date));
+    if (d && (!invMaxDate || d > invMaxDate)) invMaxDate = d;
+  }
+  const invPush = (r, cfa, ok, why, bucket) => {
+    const code = pick(r, aIv.code), dm = dimsOf(code);
+    DR.invoice.push({raw:String(pick(r, aIv.wh) ?? ""), cfa, code:String(code ?? "").trim(),
+      name:String(pick(r, aIv.name) ?? ""), ...dm,
+      custGroup:String(pick(r, ["Sales Channel"]) ?? ""),
+      customer:String(pick(r, aIv.customer) ?? ""),
+      state:String(pick(r, ["Supply Location"]) ?? ""),
+      date:parseDate(pick(r, aIv.date)),
+      status:String(pick(r, aIv.status) ?? ""),
+      disp:num(pick(r, aIv.qty)),
+      bucket, ok, why, whGroup:`${cfa} — ${dm.itemGroup}`});
+  };
+  for (const r of invoice.rows){
+    const raw = pick(r, aIv.wh), code = pick(r, aIv.code);
+    const status = norm(pick(r, aIv.status));
+    const customer = norm(pick(r, aIv.customer));
+    if (status === INV_RETURN_STATUS){ invReturns++; invPush(r, "", 0, "Invoice Status is Return", ""); continue; }
+    if (customer.includes(INV_CUSTOMER_BLOCK)){ invSamples++; invPush(r, "", 0, "Customer is a sample order", ""); continue; }
+    const w = mIv.get(norm(raw));
+    if (!w){ trackUnmapped("invoice", raw); invPush(r, "", 0, "From Warehouse not mapped to a CFA", ""); continue; }
+    if (!isSku(code)){ diag.nonSku.invoice++; invPush(r, w.cfa, 0, "not an active CFA SKU", ""); continue; }
+    const d = parseDate(pick(r, aIv.date));
+    if (limitMonth && invMaxDate && d && (d.getMonth() !== invMaxDate.getMonth() || d.getFullYear() !== invMaxDate.getFullYear())){
+      invOutOfMonth++; invPush(r, w.cfa, 0, "outside the month of the max invoice date", ""); continue;
     }
-    diag.kept.dispatch++;
+    // Advisory only: a credit note can carry a blank status but a filled Return Against.
+    if (String(pick(r, aIv.retAgainst) ?? "").trim()) invRetAgainst++;
+    const q = num(pick(r, aIv.qty));
+    const bucket = W.get(w.cfa); if (!bucket) continue;
+    const sku = rowFor(w.cfa, code, pick(r, aIv.name));
+    bucket.disp += q; sku.disp += q;
+    bucket.dispRows++; sku.dispRows++;
+    fanOut("inv", code, w.cfa, r, "disp", q);
+    invPush(r, w.cfa, 1, "", "Dispatched");
+    diag.kept.invoice++;
   }
 
   /* Conditions 7 & 8 — final DRR and DOH */
@@ -525,7 +660,9 @@ function compute(){
 
   state.result = {
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
-    mtdDays, autoMtdDays, altMtdDays, priorDays, uniqueDateDays, mtdMode, monthsSpanned: monthsSeen.size,
+    mtdDays, autoMtdDays, altMtdDays, priorDays, uniqueDateDays, pendDateDays, invDateDays,
+    mtdMode, monthsSpanned: monthsSeen.size, invMaxDate,
+    invReturns, invSamples, invOutOfMonth, invRetAgainst, zeroPend,
     priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size, pivots: PV,
     dataRows: DR,
     groupKeys: [...PV.entries()].flatMap(([pivot, m]) =>
@@ -548,7 +685,7 @@ function render(){
   renderKpis(r); renderWhTable(r); renderWhFilter(r); renderSkuTable(r); renderDiag(r); renderMtdSetting();
   $("#paramNote").textContent =
     `Basis: ${activeBases().map(b => BASIS_LABEL[b]).join(" · ")} · Projection divisor ${r.projDays} day(s) (${r.projMonthLabel}${r.ovProj?", manual override":""}) · ` +
-    `MTD divisor ${r.mtdDays} day(s) (${r.ovMtd ? "manual override" : r.mtdMode === "uniqueDates" ? `${r.uniqueDateDays} unique date(s) in Sales_Order_Date` : r.mtdMode === "plusPrior" ? `max ${ymd(r.maxDate)} + ${r.priorDays} earlier-month day(s)` : `day-of-month of max ${ymd(r.maxDate)}`}) · ` +
+    `MTD divisor ${r.mtdDays} day(s) (${r.ovMtd ? "manual override" : r.mtdMode === "uniqueDates" ? `${r.uniqueDateDays} unique date(s) across Sales_Order_Date and Invoice Date` : r.mtdMode === "plusPrior" ? `max ${ymd(r.maxDate)} + ${r.priorDays} earlier-month day(s)` : `day-of-month of max ${ymd(r.maxDate)}`}) · ` +
     `${r.activeSkus} active CFA SKUs.`;
 }
 
@@ -657,14 +794,14 @@ function renderDiag(r){
       <h4>${title}</h4>
       <p style="margin:0 0 8px;color:var(--ink-2);font-size:12.5px">
         ${fmt0(d.kept[ds])} rows used · ${fmt0(d.nonSku[ds])} dropped (not a CFA SKU)
-        ${ds==="dispatch" && r.outOfMonth ? ` · ${fmt0(r.outOfMonth)} dropped (outside ${ym(r.maxDate)})` : ""}
+        ${ds==="pendency" && r.outOfMonth ? ` · ${fmt0(r.outOfMonth)} dropped (outside ${ym(r.maxDate)})` : ""}
       </p>
       ${list.length
         ? `<h4 style="margin-top:10px">Unmapped labels</h4><ul>${list.map(([k,v]) => `<li><code>${esc(k)}</code> — ${fmt0(v)} rows</li>`).join("")}</ul>`
         : `<p class="good">All warehouse labels mapped.</p>`}
     </section>`;
   };
-  $("#diag").innerHTML = block("In Hand","inhand") + block("Projection","projection") + block("Dispatches + Pendencies","dispatch");
+  $("#diag").innerHTML = DS_KEYS.map(k => block(DS_LABEL[k], k)).join("");
 }
 
 function renderMtdSetting(){
@@ -736,7 +873,7 @@ function renderSkuMaster(){
 
 function renderWhMaster(){
   $("#whCount").textContent = `${state.wh.filter(w => w.active).length} active / ${state.wh.length}`;
-  const dsOpts = Object.entries(DS_LABEL).map(([k,v]) => [k,v]);
+  const dsOpts = DS_KEYS.map(k => [k, DS_LABEL[k]]);
   $("#whMaster").innerHTML = `<thead><tr>
       <th style="text-align:left">Dataset</th><th style="text-align:left">Raw label in file</th>
       <th style="text-align:left">CFA (normalised)</th><th style="text-align:left">Stock type</th><th>Active</th><th></th>
@@ -772,10 +909,26 @@ In Transit      = Σ Balance Qty where stock type = In Transit</div>
 
   <h3>Condition 6 — Pendency + dispatch MTD DRR</h3>
   <p>From the <em>Dispatches plus pendencies</em> file, grouped by normalised <code>Origin</code>:</p>
-  <div class="formula">Pendency   = Σ Pending Kgs   over rows where Pending Kgs &gt; 0
-Dispatched = Σ Stock_qty    over rows where Pending Kgs = 0
+  <div class="formula">Pendency   = Σ Pending Kgs      — file 3, rows where Pending Kgs &gt; 0
+Dispatched = Σ Stock Qty In Kg  — file 4, rows that survive the exclusions
 MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
-  <p>Each row falls into <strong>one</strong> of the two, never both. A row that still has pending kilos counts as pendency; a row with none is fully delivered, so its <code>Stock_qty</code> is what actually went out. Counting both would double-count — in this feed <code>Stock_qty</code> equals <code>Pending Kgs</code> on every row that still has pending. Where a warehouse has no zero-pending row at all, Dispatched is <strong>nil</strong> and shows as “—”, not as a computed zero.</p>
+  <p>The two halves come from <strong>two different files</strong>, so nothing can be counted twice.</p>
+  <ul>
+    <li><strong>Pendency</strong> — the pendency file, grouped by normalised <code>Origin</code>, summing <code>Pending Kgs</code> over rows
+        that still have kilos outstanding. <code>Stock_qty</code> in that file is deliberately <em>not</em> read: on every row with pending
+        it simply repeats <code>Pending Kgs</code>.</li>
+    <li><strong>Dispatched</strong> — the sales-invoice file, grouped by normalised <code>From Warehouse</code>, summing
+        <code>Stock Qty In Kg</code>. Only the two CFA finished-goods warehouses are mapped, so an invoice raised from a plant
+        contributes nothing: those goods never passed through a CFA.</li>
+  </ul>
+  <p>Three filters run on the invoice file <em>before</em> anything is summed: rows whose <code>Invoice Status</code> is
+     <strong>Return</strong> are dropped, rows whose <code>Customer</code> contains <strong>“sample order”</strong> are dropped, and
+     rows whose <code>From Warehouse</code> is not a mapped CFA are dropped. Every drop is counted and listed under Data diagnostics
+     and on the Exclusions sheet. Where a warehouse has no surviving invoice row, Dispatched is <strong>nil</strong> and shows as
+     “—”, not as a computed zero.</p>
+  ${r && r.invRetAgainst ? `<p><strong>Watch:</strong> ${r.invRetAgainst} counted invoice row(s) carry a value in
+     <code>Return Against</code> without an <code>Invoice Status</code> of Return. They are included, because the rule as written keys
+     on the status. Say the word and the app can exclude those too.</p>` : ""}
   <p>Three divisor rules are available; switching between them changes no other figure:</p>
   <ol>
     <li><strong>Unique dates in <code>Sales_Order_Date</code></strong> — <em>the default</em>. How many distinct dates actually
@@ -794,7 +947,8 @@ MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
       ? `${r.priorDays} earlier date(s) carry CFA pendency or dispatch → <strong>${r.altMtdDays}</strong> (rule 3)`
       : `no earlier date carries CFA pendency or dispatch, so rule 3 also gives <strong>${r.autoMtdDays}</strong>`}.
     In force: <strong>${r.mtdDays}</strong> day(s) — ${r.ovMtd ? "manual override" : MTD_MODE_LABEL[r.mtdMode]}.</p>` : ""}
-  <p> Dates arriving as text and as real dates are both parsed. No dispatch-status filter is applied: <code>Stock_qty</code> is taken as dispatched exactly as the Condition tab specifies.</p>
+  <p>Dates arriving as text, as real dates and as Excel serials are all parsed. A date-only cell that a reader hands back as
+     23:59:5x on the previous day is rounded to the day it actually represents, so no row drifts into the wrong month.</p>
 
   <h3>Condition 7 — Final DRR</h3>
   <div class="formula">Final DRR = MAX(Projection DRR, MTD DRR)</div>
@@ -816,7 +970,7 @@ MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
     <li>All four quantity columns are in <strong>kilograms</strong>; no unit conversion is applied.</li>
     <li>Projection <code>Origin</code> is the producing plant and is ignored; the CFA there is <code>Wareouse</code>.</li>
     <li>Dispatch rows outside the month of the max date are excluded while the “limit to month” setting is on.</li>
-    <li>No dispatch-status filter, per Condition 6 as written.</li>
+    <li>Dispatched counts invoiced kilos, excluding returns and sample orders; the pendency file no longer contributes a dispatched figure.</li>
   </ul>`;
 }
 
@@ -880,7 +1034,7 @@ async function exportExcel(){
       {h:"Total KGs", w:14, v:r => r.qty, n:true},
       {h:"Counted", w:9, v:r => r.ok}, {h:"Excluded because", w:30, v:r => r.why}
     ], r.dataRows.projection);
-    const DP = dataSheet("Data - Dispatch", [
+    const DP = dataSheet("Data - Pendency", [
       {h:"Origin (raw)", w:20, v:r => r.raw}, {h:"CFA", w:13, v:r => r.cfa},
       {h:"Item Code", w:24, v:r => r.code}, {h:"Item Name", w:44, v:r => r.name}, ...DIM_COLS,
       {h:"Customer Group", w:20, v:r => r.custGroup}, {h:"Customer", w:34, v:r => r.customer},
@@ -891,10 +1045,26 @@ async function exportExcel(){
       // in the sheet as the previous calendar day and shift the divisor by one.
       {h:"Sales_Order_Date", w:16, d:true,
        v:r => r.date ? new Date(Date.UTC(r.date.getFullYear(), r.date.getMonth(), r.date.getDate())) : null},
-      {h:"Pending Kgs", w:13, v:r => r.pend, n:true}, {h:"Stock_qty", w:13, v:r => r.disp, n:true},
+      {h:"Pending Kgs", w:13, v:r => r.pend, n:true},
       {h:"Bucket", w:13, v:r => r.bucket},
       {h:"Counted", w:9, v:r => r.ok}, {h:"Excluded because", w:30, v:r => r.why}
-    ], r.dataRows.dispatch);
+    ], r.dataRows.pendency);
+
+    /* Dispatched kilos live on their own sheet now — sourced from the sales-invoice
+       file, warehouse taken from From Warehouse, returns and sample orders excluded. */
+    const IV = dataSheet("Data - Dispatch", [
+      {h:"From Warehouse (raw)", w:44, v:r => r.raw}, {h:"CFA", w:13, v:r => r.cfa},
+      {h:"Item Code", w:24, v:r => r.code}, {h:"Item Name", w:44, v:r => r.name}, ...DIM_COLS,
+      {h:"Sales Channel", w:20, v:r => r.custGroup}, {h:"Customer", w:34, v:r => r.customer},
+      {h:"Supply Location", w:18, v:r => r.state},
+      {h:"CFA x Item Group", w:32, v:r => r.whGroup},
+      {h:"Invoice Date", w:16, d:true,
+       v:r => r.date ? new Date(Date.UTC(r.date.getFullYear(), r.date.getMonth(), r.date.getDate())) : null},
+      {h:"Invoice Status", w:15, v:r => r.status},
+      {h:"Stock Qty In Kg", w:15, v:r => r.disp, n:true},
+      {h:"Bucket", w:13, v:r => r.bucket},
+      {h:"Counted", w:9, v:r => r.ok}, {h:"Excluded because", w:30, v:r => r.why}
+    ], r.dataRows.invoice);
 
     const GK = wb.addWorksheet("Data - Group Keys", {views:[{state:"frozen", ySplit:1}]});
     GK.columns = [{width:26},{width:40},{width:24}];
@@ -906,10 +1076,12 @@ async function exportExcel(){
     /* column letters on the data sheets, by name */
     const ihCol = {cfa:"B", type:"C", code:"D", itemGroup:"F", misGroup:"G", itemParent:"H", itemType:"I", whGroup:"J", qty:"K", ok:"L"};
     const pjCol = {cfa:"B", code:"C", itemGroup:"D", misGroup:"E", itemParent:"F", itemType:"G", custGroup:"H", customer:"I", whGroup:"J", qty:"K", ok:"L"};
-    const dpCol = {cfa:"B", code:"C", itemGroup:"E", misGroup:"F", itemParent:"G", itemType:"H", custGroup:"I", customer:"J", state:"K", whGroup:"L", date:"M", pend:"N", disp:"O", bucket:"P", ok:"Q"};
+    const dpCol = {cfa:"B", code:"C", itemGroup:"E", misGroup:"F", itemParent:"G", itemType:"H", custGroup:"I", customer:"J", state:"K", whGroup:"L", date:"M", pend:"N", bucket:"O", ok:"P"};
+    const ivCol = {cfa:"B", code:"C", itemGroup:"E", misGroup:"F", itemParent:"G", itemType:"H", custGroup:"I", customer:"J", state:"K", whGroup:"L", date:"M", status:"N", disp:"O", bucket:"P", ok:"Q"};
     const IHR = n => `'Data - In Hand'!$${n}$2:$${n}$${IH.last}`;
     const PJR = n => `'Data - Projection'!$${n}$2:$${n}$${PJ.last}`;
-    const DPR = n => `'Data - Dispatch'!$${n}$2:$${n}$${DP.last}`;
+    const DPR = n => `'Data - Pendency'!$${n}$2:$${n}$${DP.last}`;
+    const IVR = n => `'Data - Dispatch'!$${n}$2:$${n}$${IV.last}`;
     /* crit: [column, criterion] pairs where criterion is a cell ref or a quoted literal */
     const sumifs = (range, ok, pairs) =>
       `SUMIFS(${range},${pairs.map(([c, v]) => `${c},${v}`).join(",")},${ok},1)`;
@@ -917,7 +1089,7 @@ async function exportExcel(){
     const fIT   = (cell, extra = []) => sumifs(IHR(ihCol.qty), IHR(ihCol.ok), [...extra, [IHR(ihCol.type), '"In Transit"']]);
     const fPROJ = extra => sumifs(PJR(pjCol.qty), PJR(pjCol.ok), extra);
     const fPEND = extra => sumifs(DPR(dpCol.pend), DPR(dpCol.ok), [...extra, [DPR(dpCol.bucket), '"Pendency"']]);
-    const fDISP = extra => sumifs(DPR(dpCol.disp), DPR(dpCol.ok), [...extra, [DPR(dpCol.bucket), '"Dispatched"']]);
+    const fDISP = extra => sumifs(IVR(ivCol.disp), IVR(ivCol.ok), [...extra, [IVR(ivCol.bucket), '"Dispatched"']]);
 
     // Divisors as formulas wherever the rule can be expressed over the data sheet.
     const pm = r.projMonthLabel.match(/^(\w+) (\d{4})$/);
@@ -975,7 +1147,7 @@ async function exportExcel(){
       ws.getCell(`E${x}`).value = {formula:fPROJ(byCfa(PJR(pjCol.cfa)))};
       ws.getCell(`F${x}`).value = {formula:projDaysRef};
       ws.getCell(`H${x}`).value = {formula:fPEND(byCfa(DPR(dpCol.cfa)))};
-      if (!w.dispNil) ws.getCell(`I${x}`).value = {formula:fDISP(byCfa(DPR(dpCol.cfa)))};
+      if (!w.dispNil) ws.getCell(`I${x}`).value = {formula:fDISP(byCfa(IVR(ivCol.cfa)))};
       ws.getCell(`K${x}`).value = {formula:mtdDaysRef};
       ws.getCell(`G${x}`).value = {formula:`IFERROR(E${x}/F${x},0)`};
       ws.getCell(`J${x}`).value = {formula:`H${x}+I${x}`};
@@ -1044,7 +1216,7 @@ async function exportExcel(){
       ds.getCell(`G${x}`).value = {formula:fPROJ(keyCode(PJR(pjCol.cfa), PJR(pjCol.code)))};
       ds.getCell(`H${x}`).value = {formula:projDaysRef};
       ds.getCell(`J${x}`).value = {formula:fPEND(keyCode(DPR(dpCol.cfa), DPR(dpCol.code)))};
-      if (!s.dispNil) ds.getCell(`K${x}`).value = {formula:fDISP(keyCode(DPR(dpCol.cfa), DPR(dpCol.code)))};
+      if (!s.dispNil) ds.getCell(`K${x}`).value = {formula:fDISP(keyCode(IVR(ivCol.cfa), IVR(ivCol.code)))};
       ds.getCell(`M${x}`).value = {formula:mtdDaysRef};
       ds.getCell(`I${x}`).value = {formula:`IFERROR(G${x}/H${x},0)`};
       ds.getCell(`L${x}`).value = {formula:`J${x}+K${x}`};
@@ -1112,11 +1284,14 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
     gap();
 
     sec("Condition 6 — pendency + dispatch MTD DRR");
-    kv("Formula", ["Pendency   = Σ Pending Kgs  over rows where Pending Kgs > 0",
-                   "Dispatched = Σ Stock_qty   over rows where Pending Kgs = 0",
-                   "MTD DRR    = (Pendency + Dispatched) ÷ day-of-month of MAX(Sales_Order_Date)"].join("\n"), true);
-    kv("One bucket per row", "A row counts as EITHER pendency OR dispatched, never both. A row with pending kilos left is pendency; a row with none is fully delivered, so its Stock_qty is the dispatched figure. Counting both would double-count — in this feed Stock_qty equals Pending Kgs on every row that still has pending.");
-    kv("Nil vs zero", "Where a warehouse (or SKU) has no zero-pending row at all, the Dispatched cell is left EMPTY — nil, not a computed zero. Column J still adds correctly across an empty cell.");
+    kv("Formula", ["Pendency   = Σ Pending Kgs      (pendency file, rows where Pending Kgs > 0)",
+                   "Dispatched = Σ Stock Qty In Kg  (sales-invoice file, after the exclusions)",
+                   "MTD DRR    = (Pendency + Dispatched) ÷ MTD divisor"].join("\n"), true);
+    kv("Two files, no overlap", "Pendency comes from the pendency file and Dispatched from the sales-invoice file, so no kilo is counted twice. Stock_qty in the pendency file is not read at all — on every row that still has pending it merely repeats Pending Kgs.");
+    kv("Warehouse source", "Pendency groups by the pendency file's Origin; Dispatched by the invoice file's From Warehouse. Only CFA finished-goods warehouses are mapped there, so an invoice raised from a plant contributes nothing — those goods never passed through a CFA.");
+    kv("Invoice exclusions", `Dropped before summing: Invoice Status = Return (${r.invReturns} row(s)); Customer containing "sample order" (${r.invSamples} row(s)); From Warehouse not mapped to a CFA. Each drop is listed on the Exclusions sheet with its reason.` +
+      (r.invRetAgainst ? ` Note: ${r.invRetAgainst} counted row(s) carry a Return Against value without a Return status — they are included, because the rule keys on the status.` : ""));
+    kv("Nil vs zero", "Where a warehouse (or SKU) has no surviving invoice row at all, the Dispatched cell is left EMPTY — nil, not a computed zero. Column J still adds correctly across an empty cell.");
     kv("Excel cells", "Warehouse DOH!J = H+I  (Pend + Disp)\nWarehouse DOH!L = IFERROR(J/K, 0)  (÷ MTD Days)", true);
     kv("Divisor rule", [
       "1. day-of-month of MAX(Sales_Order_Date)                       <- default",
@@ -1132,7 +1307,7 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
     kv("Row scope", r.limitMonth
       ? `Dispatch rows are limited to the month of the max date; ${fmt0(r.outOfMonth)} row(s) fell outside and were excluded.`
       : "All dispatch rows are included regardless of month.");
-    kv("Status filter", "None on Dispatch_Status itself. The zero-pending test is what separates delivered from outstanding, and it does so per row rather than per order.");
+    kv("Dates", "Sales_Order_Date and Invoice Date are parsed from text, real dates and Excel serials alike. A date-only cell that a reader hands back as 23:59:5x on the previous day is rounded to the day it represents, so no row drifts into the wrong month.");
     gap();
 
     sec("Condition 7 — final DRR");
@@ -1160,7 +1335,6 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
     sec("Assumptions");
     kv("Units", "Balance Qty, Total KGs, Pending Kgs and Stock_qty are all treated as kilograms; no conversion factor is applied.");
     kv("Projection Origin", "Ignored — it is the producing plant. The CFA in the projection file is the Wareouse column.");
-    kv("Dates", "Sales_Order_Date is parsed from text (YYYY-MM-DD or DD/MM/YYYY), real dates and Excel serials alike.");
     gap();
 
     sec("Pivots sheet");
@@ -1191,11 +1365,12 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
       const m = r.pivots.get(name);
       if (!m || !m.size) continue;
       const dim = PIVOT_DIMS.find(d => d.label === name);
-      const dimCols = name === "Warehouse"              ? {ih:ihCol.cfa, pj:pjCol.cfa, dp:dpCol.cfa}
-                    : name === "Warehouse x item group" ? {ih:ihCol.whGroup, pj:pjCol.whGroup, dp:dpCol.whGroup}
+      const dimCols = name === "Warehouse"              ? {ih:ihCol.cfa, pj:pjCol.cfa, dp:dpCol.cfa, iv:ivCol.cfa}
+                    : name === "Warehouse x item group" ? {ih:ihCol.whGroup, pj:pjCol.whGroup, dp:dpCol.whGroup, iv:ivCol.whGroup}
                     : {ih: dim.sku ? ihCol[dim.key] : null,
                        pj: dim.sku ? pjCol[dim.key] : (dim.proj ? pjCol[dim.key] : null),
-                       dp: dpCol[dim.key] || null};
+                       dp: dpCol[dim.key] || null,
+                       iv: ivCol[dim.key] || null};
       const hasStock = !!dimCols.ih && [...m.values()].some(a => a.both || a.fg || a.it);
       const hasProj  = !!dimCols.pj && [...m.values()].some(a => a.projKgs);
       const caveats = [
@@ -1221,6 +1396,7 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
         const ih = dimCols.ih ? [[IHR(dimCols.ih), `$A${x}`]] : null;
         const pj = dimCols.pj ? [[PJR(dimCols.pj), `$A${x}`]] : null;
         const dp = dimCols.dp ? [[DPR(dimCols.dp), `$A${x}`]] : null;
+        const iv = dimCols.iv ? [[IVR(dimCols.iv), `$A${x}`]] : null;
         pv.getCell(`B${x}`).value = {formula:
           `COUNTIFS('Data - Group Keys'!$A$2:$A$${gkLast},"${name}",'Data - Group Keys'!$B$2:$B$${gkLast},$A${x})`};
         if (ih){
@@ -1233,7 +1409,7 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
           pv.getCell(`J${x}`).value = {formula:projDaysRef};
         }
         pv.getCell(`G${x}`).value = {formula:fPEND(dp)};
-        pv.getCell(`H${x}`).value = {formula:fDISP(dp)};
+        pv.getCell(`H${x}`).value = {formula:fDISP(iv)};
         pv.getCell(`L${x}`).value = {formula:mtdDaysRef};
         pv.getCell(`I${x}`).value = {formula:`G${x}+H${x}`};
         pv.getCell(`K${x}`).value = {formula:`IFERROR(F${x}/J${x},0)`};
@@ -1266,14 +1442,14 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
     const ex = wb.addWorksheet("Exclusions");
     ex.columns = [{width:24},{width:60},{width:16},{width:40}];
     ex.getRow(1).values = ["Dataset","Raw label (unmapped)","Rows","Effect"]; headerRow(ex, 1);
-    const rawCol = {inhand:"A", projection:"A", dispatch:"A"};
-    const SHEET = {inhand:"Data - In Hand", projection:"Data - Projection", dispatch:"Data - Dispatch"};
-    const LAST  = {inhand:IH.last, projection:PJ.last, dispatch:DP.last};
-    const OKCOL  = {inhand:ihCol.ok, projection:pjCol.ok, dispatch:dpCol.ok};
-    const WHYCOL = {inhand:"M", projection:"M", dispatch:"R"};   // the column right after "Counted"
+    const rawCol = {inhand:"A", projection:"A", pendency:"A", invoice:"A"};
+    const SHEET = {inhand:"Data - In Hand", projection:"Data - Projection", pendency:"Data - Pendency", invoice:"Data - Dispatch"};
+    const LAST  = {inhand:IH.last, projection:PJ.last, pendency:DP.last, invoice:IV.last};
+    const OKCOL  = {inhand:ihCol.ok, projection:pjCol.ok, pendency:dpCol.ok, invoice:ivCol.ok};
+    const WHYCOL = {inhand:"M", projection:"M", pendency:"Q", invoice:"R"};   // the column right after "Counted"
     const rng = (dsk, c) => `'${SHEET[dsk]}'!$${c}$2:$${c}$${LAST[dsk]}`;
     let er = 2;
-    for (const dsk of ["inhand","projection","dispatch"]){
+    for (const dsk of DS_KEYS){
       for (const [label] of [...r.diag.unmapped[dsk].entries()].sort((a,b) => b[1]-a[1])){
         const row = ex.getRow(er);
         row.values = [DS_LABEL[dsk], label, null, "Not mapped to a CFA — excluded from all figures"];
@@ -1287,10 +1463,10 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
     ex.getCell(`A${er}`).value = "Row counts"; ex.getCell(`A${er}`).font = {bold:true, color:{argb:BRAND}};
     er += 1;
     ex.getRow(er++).values = ["Dataset","Rows used","Dropped: not a CFA SKU",""];
-    for (const dsk of ["inhand","projection","dispatch"]){
+    for (const dsk of DS_KEYS){
       const row = er;
       ex.getRow(row).values = [DS_LABEL[dsk], null, null,
-        dsk === "dispatch" && r.limitMonth ? `${r.outOfMonth} also dropped as outside the max month` : ""];
+        dsk === "pendency" && r.limitMonth ? `${r.outOfMonth} also dropped as outside the max month` : ""];
       ex.getCell(`B${row}`).value = {formula:`COUNTIFS(${rng(dsk, OKCOL[dsk])},1)`};
       ex.getCell(`C${row}`).value = {formula:`COUNTIFS(${rng(dsk, WHYCOL[dsk])},"not an active CFA SKU")`};
       er++;
@@ -1364,6 +1540,25 @@ function init(){
   $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber; $("#mtdMode").value = state.mtdMode;
   syncBasisToggle();
   renderFileTable(); renderSkuMaster(); renderWhMaster(); vizInit(); renderViz();
+
+  // bring back the kept projection, if this browser holds one
+  loadKeptProjection().then(p => {
+    if (!p || !p.rows) return;
+    state.files.projection = p;
+    markLoaded("projection", p);
+    compute(); renderFileTable();
+  });
+  $("#clearProjection").addEventListener("click", async () => {
+    if (!confirm("Forget the stored projection? You will need to upload it again.")) return;
+    await forgetProjection();
+    state.files.projection = null;
+    const drop = $('.drop[data-ds="projection"]');
+    drop.className = "drop keeps";
+    drop.querySelector(".status").textContent = "Not loaded";
+    $("#clearProjection").hidden = true;
+    compute(); renderFileTable();
+    toast("Stored projection cleared");
+  });
   $("#logicBody").innerHTML = logicHtml(null);
 
   $("#tabs").addEventListener("click", e => { const t = e.target.closest(".tab"); if (t) showView(t.dataset.view); });

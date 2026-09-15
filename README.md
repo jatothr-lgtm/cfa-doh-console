@@ -1,9 +1,9 @@
 # CFA Warehouse DOH Console
 
-Days-on-hand per CFA warehouse, computed from three uploaded files against two maintained masters.
+Days-on-hand per CFA warehouse, computed from four uploaded files against two maintained masters.
 Implements the `Condition` tab of *Warehouse Wise Stock Qty and Stock Balance -Test*.
 
-**No login. No backend. No data leaves the browser** — the three source files are parsed in-page and never uploaded anywhere. Only the two masters are stored, in `localStorage`.
+**No login. No backend. No data leaves the browser** — the source files are parsed in-page and never uploaded anywhere. The two masters are stored in `localStorage`, and the projection file in IndexedDB.
 
 ## Files
 
@@ -13,7 +13,7 @@ Implements the `Condition` tab of *Warehouse Wise Stock Qty and Stock Balance -T
 | `styles.css` | design tokens, light + dark |
 | `app.js` | parsing, calculation, masters, Excel export |
 | `viz.js` | the Visualisation tab — charts drawn by hand, no chart library |
-| `sample-data/` | local only, gitignored — the three source tabs split into separate workbooks for testing. Not in the repo: it holds real customer and rate data. Recreate it by saving the `In Hand`, `Projection` and `dispatches plus pendencies` tabs as three separate workbooks. |
+| `sample-data/` | local only, gitignored — the source tabs split into separate workbooks for testing, plus a synthetic sales-invoice file. Not in the repo: it holds real customer and rate data. Recreate it by saving the `In Hand`, `Projection` and `dispatches plus pendencies` tabs as three separate workbooks. |
 
 ## Running it
 
@@ -36,7 +36,7 @@ git config user.email "jatoth.r@farmley.com"
 
 ## How to use
 
-1. **Data** tab → load the three files (click or drag). Headers are validated on load; a file that looks like a different dataset is flagged.
+1. **Data** tab → load the four files (click or drag). Headers are validated on load; a file that looks like a different dataset is flagged.
 2. **Dashboard** → KPI per CFA, warehouse summary, SKU drilldown, diagnostics.
 3. **Visualisation** → every critical SKU, plus six charts of the whole analysis.
 4. The **In Transit + FG / FG only / In Transit only** control is multi-select: tick as many as you
@@ -53,26 +53,52 @@ FG              = Σ Balance Qty  (FG rows)
 In Transit      = Σ Balance Qty  (In-Transit rows)
 
 Projection DRR  = Σ Total KGs ÷ calendar days in the projection month
-Pendency        = Σ Pending Kgs   over rows where Pending Kgs > 0
-Dispatched      = Σ Stock_qty    over rows where Pending Kgs = 0
+Pendency        = Σ Pending Kgs      (pendency file, rows where Pending Kgs > 0)
+Dispatched      = Σ Stock Qty In Kg  (sales-invoice file, after the exclusions)
 MTD DRR         = (Pendency + Dispatched) ÷ MTD divisor (see below)
 Final DRR       = MAX(Projection DRR, MTD DRR)
 DOH             = selected stock ÷ Final DRR
 ```
 
-Each dispatch row lands in **one** bucket, never both: a row with pending kilos left is pendency, a
-row with none is fully delivered so its `Stock_qty` is what actually went out. Counting both would
-double-count — in this feed `Stock_qty` equals `Pending Kgs` on every row that still has pending.
-Where a warehouse or SKU has no zero-pending row at all, Dispatched is **nil** (shown as "—", and
-left as an empty cell in the export), not a computed zero.
+### The four inputs
+
+| Slot | Warehouse column | Measure | Kept between sessions |
+|---|---|---|---|
+| In Hand | `warehouse` | `Balance Qty`, split FG / In Transit | no |
+| Projection | `Wareouse` | `Total KGs` | **yes** |
+| Pendencies | `Origin` | `Pending Kgs` | no |
+| Dispatches (sales invoice) | `From Warehouse` | `Stock Qty In Kg` | no |
+
+Pendency and Dispatched come from **two different files**, so no kilo is counted twice. `Stock_qty`
+in the pendency file is deliberately not read — on every row that still has pending it merely
+repeats `Pending Kgs`.
+
+The invoice file drops three kinds of row **before** anything is summed, each counted and listed
+under Data diagnostics and on the Exclusions sheet:
+
+- `Invoice Status` = **Return**
+- `Customer` containing **"sample order"** (case-insensitive, anywhere in the field)
+- `From Warehouse` not mapped to a CFA — an invoice raised from a plant contributes nothing,
+  because those goods never passed through a CFA
+
+A counted row carrying a `Return Against` value *without* a Return status is included, since the
+rule keys on the status; the app reports how many, on the Logic tab and the Logic sheet.
+
+Where a warehouse or SKU has no surviving invoice row, Dispatched is **nil** (shown as "—", an
+empty cell in the export), not a computed zero.
+
+**The projection stays loaded.** It changes once a month, so it is stored in IndexedDB and restored
+on load, with a Clear button beside the slot. Per browser, per machine — there is no backend, so a
+colleague opening the link starts with an empty slot.
 
 ### The MTD divisor
 
 Three rules, selectable on the Data tab. All three read the **whole `Sales_Order_Date` column**
 before the CFA/SKU filters, so every warehouse divides by the same number.
 
-1. **Unique dates in `Sales_Order_Date`** — *the default*. How many distinct dates actually appear
-   in the column. A day the business took no order on never appears, so it never pads the divisor
+1. **Unique dates across both flow files** — *the default*. Distinct dates appearing in
+   `Sales_Order_Date` (pendency) or `Invoice Date` (invoice), so the divisor covers the same period
+   as the kilos above the line. A day the business took no order on never appears, so it never pads the divisor
    and never flatters the daily rate.
 2. **Day-of-month of the max `Sales_Order_Date`** — days elapsed in the month whether or not each
    one carried an order. This is the rule worked through in the Condition tab.
