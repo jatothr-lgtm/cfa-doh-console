@@ -120,10 +120,6 @@
   <div class="card">
     <div class="card-head"><h2>Calculation settings</h2></div>
     <div class="settings">
-      <label>Projection divisor (days in month)
-        <input type="number" id="projDays" placeholder="auto" min="1" step="1">
-        <small id="projDaysAuto">auto</small>
-      </label>
       <label>MTD divisor rule
         <select id="mtdMode">
           <option value="uniqueDates">Unique dates in Sales_Order_Date</option>
@@ -132,14 +128,31 @@
         </select>
         <small id="mtdModeAuto">&nbsp;</small>
       </label>
-      <label>MTD divisor override
-        <input type="number" id="mtdDays" placeholder="auto" min="1" step="1">
-        <small id="mtdDaysAuto">auto</small>
+      <label>Projection divisor
+        <output id="projDaysShown" class="readout">—</output>
+        <small>calendar days of the projection month</small>
       </label>
       <label class="chk"><input type="checkbox" id="limitMonth" checked> Limit dispatch rows to the month of the max date</label>
     </div>
-    <p class="note">Leave the divisors blank to use the values derived from the files. Any override is carried into the Excel export and the Logic tab.</p>
     <p class="note" id="mtdModeNote"></p>
+
+    <details class="advanced" id="advanced">
+      <summary>Advanced — replace a divisor by hand</summary>
+      <p class="note warn">Typing a number here <strong>overrides the rule above</strong> and shifts every DOH figure in
+        the app and the exported workbook. Leave both blank unless you need a divisor no rule covers — working days only,
+        say. An override in force is labelled as such on the dashboard, in the export and on the Logic sheet.</p>
+      <div class="settings">
+        <label>Projection divisor override
+          <input type="number" id="projDays" placeholder="blank = rule" min="1" step="1">
+          <small id="projDaysAuto">auto</small>
+        </label>
+        <label>MTD divisor override
+          <input type="number" id="mtdDays" placeholder="blank = rule" min="1" step="1">
+          <small id="mtdDaysAuto">auto</small>
+        </label>
+        <label class="chk"><button class="btn btn-sm" id="clearOverrides" type="button">Clear both overrides</button></label>
+      </div>
+    </details>
   </div>
 
   <div class="card">

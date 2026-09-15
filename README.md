@@ -92,8 +92,12 @@ Rules 1 and 2 export as live Excel formulas — the distinct count as
 scans the whole column, so it is evaluated in **one** cell (`Warehouse DOH!I3`) and every per-row
 divisor references it. Editing that one cell re-drives the whole workbook.
 
-Either divisor can also be overridden by hand on the Data tab; an override is carried into the
-export and the Logic sheet.
+Either divisor can be replaced by hand, but that lives behind **Advanced — replace a divisor by
+hand** on the Data tab, collapsed by default. It exists for a divisor no rule covers (working days
+only, say), not for routine use. An override can never be silently active: the panel opens itself,
+the card heading carries a *manual override in force* badge, the note says what the rule would have
+given, and the label follows the number into the dashboard, the export and the Logic sheet. **Clear
+both overrides** puts the divisors back on their rules.
 
 ## Visualisation tab
 

@@ -673,13 +673,26 @@ function renderMtdSetting(){
   const note = $("#mtdModeNote");
   if (!r || !r.maxDate){ note.textContent = ""; $("#mtdDaysAuto").textContent = "auto"; return; }
 
+  // An override must never be silently active: open the Advanced panel and badge
+  // the heading whenever one is in force.
+  const anyOv = !!(r.ovMtd || r.ovProj);
+  const adv = $("#advanced");
+  if (anyOv && adv) adv.open = true;
+  $("#projDaysShown").textContent = r.projDays ?? "—";
+  const head = $("#view-upload .card-head h2");
+  if (head) head.innerHTML = "Calculation settings" + (anyOv
+    ? ` <span class="ovbadge">manual override in force</span>` : "");
+
   const modeVal = {uniqueDates: r.uniqueDateDays, maxDay: r.autoMtdDays, plusPrior: r.altMtdDays};
   $("#mtdDaysAuto").textContent = `auto: ${modeVal[r.mtdMode] ?? "—"}`;
   const skipped = r.priorSkippedCount
     ? ` ${r.priorSkippedCount} further earlier date(s) carry no CFA pendency or dispatch and were skipped.` : "";
 
   const lines = [
-    `<b>In force: ${r.mtdDays} day(s)</b>${r.ovMtd ? " — manual override" : ` — ${MTD_MODE_LABEL[r.mtdMode]}`}.`,
+    r.ovMtd
+      ? `<b>In force: ${r.mtdDays} day(s) — manual override.</b> The rule above would give
+         ${modeVal[r.mtdMode] ?? "—"}; clear the override under Advanced to go back to it.`
+      : `<b>In force: ${r.mtdDays} day(s)</b> — ${MTD_MODE_LABEL[r.mtdMode]}.`,
     `<code>Sales_Order_Date</code> holds <b>${r.uniqueDateDays}</b> unique date(s); the latest is ${ymd(r.maxDate)},
      whose day-of-month is <b>${r.autoMtdDays}</b>${r.priorDays ? `, and ${r.priorDays} earlier-month date(s) carry CFA
      pendency or dispatch, giving <b>${r.altMtdDays}</b> under the third rule` : ""}.${skipped}`
@@ -1389,6 +1402,10 @@ function init(){
 
   /* settings */
   ["#projDays","#mtdDays"].forEach(s => $(s).addEventListener("change", compute));
+  $("#clearOverrides").addEventListener("click", () => {
+    $("#projDays").value = ""; $("#mtdDays").value = "";
+    compute(); toast("Overrides cleared — both divisors back on their rules");
+  });
   $("#mtdMode").addEventListener("change", e => { state.mtdMode = e.target.value; saveMasters(); compute(); });
   $("#limitMonth").addEventListener("change", compute);
 
