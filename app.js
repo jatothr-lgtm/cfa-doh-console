@@ -112,7 +112,7 @@ const ALIASES = {
      `Stock Qty In Kg`, and returns / sample orders are dropped before summing. */
   invoice:    {wh:["From Warehouse"], code:["Item Code","Item_Code","item_code"], name:["Item Name","Item_Name","item_name"],
                qty:["Stock Qty In Kg"], date:["Invoice Date"], status:["Invoice Status"],
-               customer:["Customer"], retAgainst:["Return Against"]}
+               customer:["Customer"]}
 };
 const DS_LABEL = {inhand:"In Hand", projection:"Projection", pendency:"Pendencies", invoice:"Dispatches (sales invoice)"};
 const DS_KEYS  = ["inhand", "projection", "pendency", "invoice"];
@@ -597,7 +597,7 @@ function compute(){
   /* ── Dispatched — from the sales-invoice file ──────────────────────────
      Warehouse is `From Warehouse`, kilos are `Stock Qty In Kg`. Returns and
      sample orders are dropped before anything is summed. */
-  let invReturns = 0, invSamples = 0, invOutOfMonth = 0, invRetAgainst = 0;
+  let invReturns = 0, invSamples = 0, invOutOfMonth = 0;
   let invMaxDate = null;
   for (const r of invoice.rows){
     const d = parseDate(pick(r, aIv.date));
@@ -628,8 +628,6 @@ function compute(){
     if (limitMonth && invMaxDate && d && (d.getMonth() !== invMaxDate.getMonth() || d.getFullYear() !== invMaxDate.getFullYear())){
       invOutOfMonth++; invPush(r, w.cfa, 0, "outside the month of the max invoice date", ""); continue;
     }
-    // Advisory only: a credit note can carry a blank status but a filled Return Against.
-    if (String(pick(r, aIv.retAgainst) ?? "").trim()) invRetAgainst++;
     const q = num(pick(r, aIv.qty));
     const bucket = W.get(w.cfa); if (!bucket) continue;
     const sku = rowFor(w.cfa, code, pick(r, aIv.name));
@@ -662,7 +660,7 @@ function compute(){
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
     mtdDays, autoMtdDays, altMtdDays, priorDays, uniqueDateDays, pendDateDays, invDateDays,
     mtdMode, monthsSpanned: monthsSeen.size, invMaxDate,
-    invReturns, invSamples, invOutOfMonth, invRetAgainst, zeroPend,
+    invReturns, invSamples, invOutOfMonth, zeroPend,
     priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size, pivots: PV,
     dataRows: DR,
     groupKeys: [...PV.entries()].flatMap(([pivot, m]) =>
@@ -926,13 +924,12 @@ MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
      rows whose <code>From Warehouse</code> is not a mapped CFA are dropped. Every drop is counted and listed under Data diagnostics
      and on the Exclusions sheet. Where a warehouse has no surviving invoice row, Dispatched is <strong>nil</strong> and shows as
      “—”, not as a computed zero.</p>
-  ${r && r.invRetAgainst ? `<p><strong>Watch:</strong> ${r.invRetAgainst} counted invoice row(s) carry a value in
-     <code>Return Against</code> without an <code>Invoice Status</code> of Return. They are included, because the rule as written keys
-     on the status. Say the word and the app can exclude those too.</p>` : ""}
+
   <p>Three divisor rules are available; switching between them changes no other figure:</p>
   <ol>
-    <li><strong>Unique dates in <code>Sales_Order_Date</code></strong> — <em>the default</em>. How many distinct dates actually
-        appear in the column, counted over the whole column before the CFA / SKU filters, exactly as the max date is. A day the
+    <li><strong>Unique dates across both flow files</strong> — <em>the default</em>. How many distinct dates appear in
+        <code>Sales_Order_Date</code> (pendency) or <code>Invoice Date</code> (invoice), counted over the whole columns before the
+        CFA / SKU filters, exactly as the max date is — so the divisor covers the same period as the kilos above the line. A day the
         business took no order on never appears, so it never pads the divisor and never flatters the daily rate.</li>
     <li><strong>Day-of-month of the maximum <code>Sales_Order_Date</code></strong> — days elapsed in the month, whether or not
         each one carried an order. This is the rule worked through in the Condition tab.</li>
@@ -1289,16 +1286,17 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
                    "MTD DRR    = (Pendency + Dispatched) ÷ MTD divisor"].join("\n"), true);
     kv("Two files, no overlap", "Pendency comes from the pendency file and Dispatched from the sales-invoice file, so no kilo is counted twice. Stock_qty in the pendency file is not read at all — on every row that still has pending it merely repeats Pending Kgs.");
     kv("Warehouse source", "Pendency groups by the pendency file's Origin; Dispatched by the invoice file's From Warehouse. Only CFA finished-goods warehouses are mapped there, so an invoice raised from a plant contributes nothing — those goods never passed through a CFA.");
-    kv("Invoice exclusions", `Dropped before summing: Invoice Status = Return (${r.invReturns} row(s)); Customer containing "sample order" (${r.invSamples} row(s)); From Warehouse not mapped to a CFA. Each drop is listed on the Exclusions sheet with its reason.` +
-      (r.invRetAgainst ? ` Note: ${r.invRetAgainst} counted row(s) carry a Return Against value without a Return status — they are included, because the rule keys on the status.` : ""));
+    kv("Invoice exclusions", `Dropped before summing: Invoice Status = Return (${r.invReturns} row(s)); Customer containing "sample order" (${r.invSamples} row(s)); From Warehouse not mapped to a CFA. Each drop is listed on the Exclusions sheet with its reason.`);
     kv("Nil vs zero", "Where a warehouse (or SKU) has no surviving invoice row at all, the Dispatched cell is left EMPTY — nil, not a computed zero. Column J still adds correctly across an empty cell.");
     kv("Excel cells", "Warehouse DOH!J = H+I  (Pend + Disp)\nWarehouse DOH!L = IFERROR(J/K, 0)  (÷ MTD Days)", true);
     kv("Divisor rule", [
-      "1. day-of-month of MAX(Sales_Order_Date)                       <- default",
-      "2. that day + one per distinct earlier date carrying CFA pendency or dispatch",
-      "   (earlier date counts only if some row on it is CFA-mapped, is an active",
-      "    CFA SKU, and has Pending Kgs OR Stock_qty — it must feed the numerator)",
-      "A single-month file gives the same answer either way."].join(String.fromCharCode(10)), true);
+      "1. unique dates across Sales_Order_Date and Invoice Date       <- default",
+      "   (a day nobody traded on never appears, so it never pads the divisor)",
+      "2. day-of-month of MAX(Sales_Order_Date) — days elapsed, traded or not",
+      "3. that day + one per distinct earlier date carrying CFA pendency",
+      "   (an earlier date counts only if some row on it is CFA-mapped, is an",
+      "    active CFA SKU, and has Pending Kgs — it must feed the numerator)",
+      "A single-month file gives the same answer under rules 2 and 3."].join(String.fromCharCode(10)), true);
     kv("Divisor used", `${r.mtdDays} day(s)${r.maxDate ? ` — max Sales_Order_Date ${ymd(r.maxDate)} gives ${r.autoMtdDays}` : ""}` +
       (r.priorDays ? `; ${r.priorDays} earlier date(s) carry CFA pendency or dispatch (${r.priorDatesList.join(", ")}) so rule 2 gives ${r.altMtdDays}${r.priorSkippedCount ? `, with ${r.priorSkippedCount} earlier date(s) skipped for carrying none` : ""}`
                    : (r.monthsSpanned > 1 ? "; earlier months are present but none carries CFA pendency, so both rules agree"

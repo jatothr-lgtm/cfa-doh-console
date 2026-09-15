@@ -81,9 +81,6 @@ under Data diagnostics and on the Exclusions sheet:
 - `From Warehouse` not mapped to a CFA — an invoice raised from a plant contributes nothing,
   because those goods never passed through a CFA
 
-A counted row carrying a `Return Against` value *without* a Return status is included, since the
-rule keys on the status; the app reports how many, on the Logic tab and the Logic sheet.
-
 Where a warehouse or SKU has no surviving invoice row, Dispatched is **nil** (shown as "—", an
 empty cell in the export), not a computed zero.
 
