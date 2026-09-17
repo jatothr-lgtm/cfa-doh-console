@@ -555,7 +555,7 @@ function compute(){
   /* ── Dispatched — from the sales-invoice file ──────────────────────────
      Warehouse is `From Warehouse`, kilos are `Stock Qty In Kg`. Returns and
      sample orders are dropped before anything is summed. */
-  let invReturns = 0, invSamples = 0, invOutOfMonth = 0;
+  let invReturns = 0, invSamples = 0;
   let invMaxDate = null;
   for (const r of invoice.rows){
     const d = parseDate(pick(r, aIv.date));
@@ -582,10 +582,6 @@ function compute(){
     const w = mIv.get(norm(raw));
     if (!w){ trackUnmapped("invoice", raw); invPush(r, "", 0, "From Warehouse not mapped to a CFA", ""); continue; }
     if (!isSku(code)){ diag.nonSku.invoice++; invPush(r, w.cfa, 0, "not an active CFA SKU", ""); continue; }
-    const d = parseDate(pick(r, aIv.date));
-    if (limitMonth && invMaxDate && d && (d.getMonth() !== invMaxDate.getMonth() || d.getFullYear() !== invMaxDate.getFullYear())){
-      invOutOfMonth++; invPush(r, w.cfa, 0, "outside the month of the max invoice date", ""); continue;
-    }
     const q = num(pick(r, aIv.qty));
     const bucket = W.get(w.cfa); if (!bucket) continue;
     const sku = rowFor(w.cfa, code, pick(r, aIv.name));
@@ -618,7 +614,7 @@ function compute(){
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
     mtdDays, uniqueDateDays, invMonthsSpanned: invMonths.size, invMaxDate,
     invDatesList: [...invDates].sort(),
-    invReturns, invSamples, invOutOfMonth, zeroPend,
+    invReturns, invSamples, zeroPend,
     pivots: PV,
     dataRows: DR,
     groupKeys: [...PV.entries()].flatMap(([pivot, m]) =>
@@ -786,11 +782,6 @@ function renderMtdSetting(){
      column before any filter${r.invMaxDate ? `; the latest is ${ymd(r.invMaxDate)}` : ""}. A day nobody
      invoiced on never appears, so it never pads the divisor.`
   ];
-  if (r.invMonthsSpanned > 1 && r.limitMonth)
-    lines.push(`<span style="color:var(--red);font-weight:600">Heads up:</span> the invoice file spans
-      ${r.invMonthsSpanned} months and the kilos are limited to the latest one, but the divisor counts
-      distinct dates across the whole column. Untick the month limit to put numerator and divisor over
-      the same period.`);
   note.innerHTML = lines.join("<br>");
 }
 

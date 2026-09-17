@@ -81,6 +81,10 @@ under Data diagnostics and on the Exclusions sheet:
 - `From Warehouse` not mapped to a CFA — an invoice raised from a plant contributes nothing,
   because those goods never passed through a CFA
 
+**No date filter is applied to the invoice file.** Every invoice date counts, whatever month it falls
+in, so the Dispatched numerator and the divisor both span the whole `Invoice Date` column. The
+*Limit … to the month of the max date* setting governs the **pendency** file only.
+
 Where a warehouse or SKU has no surviving invoice row, Dispatched is **nil** (shown as "—", an
 empty cell in the export), not a computed zero.
 
