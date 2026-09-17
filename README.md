@@ -55,7 +55,7 @@ In Transit      = Σ Balance Qty  (In-Transit rows)
 Projection DRR  = Σ Total KGs ÷ calendar days in the projection month
 Pendency        = Σ Pending Kgs      (pendency file, rows where Pending Kgs > 0)
 Dispatched      = Σ Stock Qty In Kg  (sales-invoice file, after the exclusions)
-MTD DRR         = (Pendency + Dispatched) ÷ MTD divisor (see below)
+MTD DRR         = (Pendency + Dispatched) ÷ distinct dates in Invoice Date
 Final DRR       = MAX(Projection DRR, MTD DRR)
 DOH             = selected stock ÷ Final DRR
 ```
@@ -90,37 +90,30 @@ colleague opening the link starts with an empty slot.
 
 ### The MTD divisor
 
-Three rules, selectable on the Data tab. All three read the **whole `Sales_Order_Date` column**
-before the CFA/SKU filters, so every warehouse divides by the same number.
+One rule:
 
-1. **Unique dates across both flow files** — *the default*. Distinct dates appearing in
-   `Sales_Order_Date` (pendency) or `Invoice Date` (invoice), so the divisor covers the same period
-   as the kilos above the line. A day the business took no order on never appears, so it never pads the divisor
-   and never flatters the daily rate.
-2. **Day-of-month of the max `Sales_Order_Date`** — days elapsed in the month whether or not each
-   one carried an order. This is the rule worked through in the Condition tab.
-3. **The max date's day + one per distinct earlier-month date carrying CFA movement.** An earlier
-   date earns its day only when at least one row on it is CFA-mapped, is an active CFA SKU, and has
-   `Pending Kgs` *or* `Stock_qty` — the date has to feed the numerator it will divide. A date
-   belonging only to a non-CFA SKU or origin, or carrying nothing in either column, adds nothing,
-   and a single-month file lands back on rule 2.
+```
+MTD divisor = count of distinct dates in the Invoice Date column
+```
 
-On the reference workbook: **13** unique dates (2026-09-06 carries no order), max date 2026-09-14 →
-**14**, and no earlier month, so rule 3 also gives 14. The Data tab spells out all three and names
-the one in force, and warns when a rule and the "limit to the max month" setting disagree about the
-period.
+Counted over the **whole `Invoice Date` column** — before the CFA/SKU filters and before the Return
+and sample-order exclusions — so every warehouse divides by the same number. A day nobody invoiced
+on never appears in the column, so it never pads the divisor and never flatters the daily rate.
 
-Rules 1 and 2 export as live Excel formulas — the distinct count as
-`SUMPRODUCT((range<>"")/COUNTIF(range,range&""))`, verified against Excel itself. That expression
-scans the whole column, so it is evaluated in **one** cell (`Warehouse DOH!I3`) and every per-row
-divisor references it. Editing that one cell re-drives the whole workbook.
+`Sales_Order_Date` no longer feeds the divisor. It keeps its other job: limiting pendency rows to the
+month of the latest order, which is a row filter rather than a divisor rule.
 
-Either divisor can be replaced by hand, but that lives behind **Advanced — replace a divisor by
-hand** on the Data tab, collapsed by default. It exists for a divisor no rule covers (working days
-only, say), not for routine use. An override can never be silently active: the panel opens itself,
-the card heading carries a *manual override in force* badge, the note says what the rule would have
-given, and the label follows the number into the dashboard, the export and the Logic sheet. **Clear
-both overrides** puts the divisors back on their rules.
+It exports as a live Excel formula, `SUMPRODUCT((range<>"")/COUNTIF(range,range&""))` over the
+`Invoice Date` column of `Data - Dispatch`, verified against Excel itself. That expression scans the
+whole column, so it is evaluated in **one** cell (`Warehouse DOH!I3`) and every per-row divisor
+references it. Editing that one cell re-drives the whole workbook.
+
+Either divisor can still be replaced by hand behind **Advanced — replace a divisor by hand** on the
+Data tab, collapsed by default. It exists for a divisor the rule does not cover, not for routine use.
+An override can never be silently active: the panel opens itself, the card heading carries a *manual
+override in force* badge, the note says what the rule would have given, and the label follows the
+number into the dashboard, the export and the Logic sheet. **Clear both overrides** puts the divisors
+back on their rules.
 
 ## Visualisation tab
 

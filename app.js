@@ -139,12 +139,7 @@ const PIVOT_DIMS = [
   {key:"state",      label:"Shipping state", sku:false, proj:null,              disp:["Shipping State"],                   inv:["Supply Location"]}
 ];
 
-const MTD_MODES = ["uniqueDates", "maxDay", "plusPrior"];
-const MTD_MODE_LABEL = {
-  uniqueDates: "Unique dates across both flow files",
-  maxDay:      "Day-of-month of the max Sales_Order_Date",
-  plusPrior:   "Max date's day + unique dates in earlier months"
-};
+const MTD_DIVISOR_LABEL = "Unique dates in Invoice Date";
 const PEND_EPS = 1e-6;   // a float artefact must not hide a delivered line
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
 
@@ -152,7 +147,7 @@ const MONTHS = ["january","february","march","april","may","june","july","august
 const LS = "cfa_doh_v1";
 let state = {
   skus: null, wh: null,
-  bases: ["both"], vizBasis: "both", mtdMode: "uniqueDates", thRed: 15, thAmber: 30,
+  bases: ["both"], vizBasis: "both", thRed: 15, thAmber: 30,
   files: {inhand:null, projection:null, pendency:null, invoice:null},
   result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL"
 };
@@ -175,7 +170,6 @@ function loadMasters(){
     else if (s.basis) state.bases = [s.basis];
     if (!state.bases.length) state.bases = ["both"];
     state.vizBasis = BASES.includes(s.vizBasis) ? s.vizBasis : state.bases[0];
-    if (MTD_MODES.includes(s.mtdMode)) state.mtdMode = s.mtdMode;
   }catch(e){
     state.skus = structuredClone(SEED_SKUS);
     state.wh   = structuredClone(SEED_WH);
@@ -185,7 +179,7 @@ function saveMasters(){
   try{
     localStorage.setItem(LS, JSON.stringify({
       skus:state.skus, wh:state.wh, thRed:state.thRed, thAmber:state.thAmber,
-      bases:state.bases, vizBasis:state.vizBasis, mtdMode:state.mtdMode
+      bases:state.bases, vizBasis:state.vizBasis
     }));
   }catch(e){ /* private window — masters stay in memory for this session */ }
 }
@@ -524,57 +518,21 @@ function compute(){
     if (!isSku(code)){ diag.nonSku.pendency++; dispPush(r, w.cfa, 0, "not an active CFA SKU", ""); continue; }
     dispRows.push({w, code, row:r, name:pick(r, aDi.name), pend:num(pick(r, aDi.pend)), d:parseDate(pick(r, aDi.date))});
   }
-  const autoMtdDays = maxDate ? maxDate.getDate() : null;
-
-  // Alternate divisor: the max date's day-of-month PLUS one day for every distinct
-  // date in an earlier month — but an earlier date only earns its day when it carries
-  // real CFA movement, i.e. at least one row that is CFA-mapped, is an active CFA SKU,
-  // and has Pending Kgs OR Stock_qty on it. In other words the date must actually feed
-  // the numerator it will divide. A date belonging only to a non-CFA SKU or origin, or
-  // carrying nothing in either column, adds nothing.
-  // A single-month file therefore adds nothing and lands back on the existing divisor.
-  const priorDates = new Set();       // earlier dates with CFA pendency or dispatch — these count
-  const priorSkipped = new Set();     // earlier dates seen but carrying neither
-  const monthsSeen = new Set();
-  if (maxDate){
-    for (const r of pendency.rows){
-      const d = parseDate(pick(r, aDi.date));
-      if (!d) continue;
-      monthsSeen.add(d.getFullYear() * 100 + d.getMonth());
-      if (d.getMonth() === maxDate.getMonth() && d.getFullYear() === maxDate.getFullYear()) continue;
-      const key = ymd(d);
-      const w = mDi.get(norm(pick(r, aDi.wh)));
-      const qualifies = !!w && isSku(pick(r, aDi.code)) && num(pick(r, aDi.pend)) > PEND_EPS;
-      if (qualifies) priorDates.add(key); else priorSkipped.add(key);
-    }
-    priorSkipped.forEach(k => { if (priorDates.has(k)) priorSkipped.delete(k); });
-  }
-  const priorDays = priorDates.size;
-  const altMtdDays = autoMtdDays == null ? null : autoMtdDays + priorDays;
-
-  // Default rule: how many distinct dates actually appear in the Sales_Order_Date
-  // column. Taken over the whole column, before the CFA / SKU filters, exactly as the
-  // max date is — so every warehouse divides by the same number. A day the business
-  // did not trade on never appears in the column and so never inflates the divisor.
-  const allDates = new Set();
-  for (const r of pendency.rows){
-    const d = parseDate(pick(r, aDi.date));
-    if (d) allDates.add(ymd(d));
-  }
-  // The numerator now draws on two files, so the divisor covers both calendars:
-  // Sales_Order_Date from the pendency file and Invoice Date from the invoice file.
-  const pendDateDays = allDates.size;
+  // ── The MTD divisor ────────────────────────────────────────────────
+  // One rule: how many distinct dates appear in the Invoice Date column.
+  // Counted over the WHOLE column — before the CFA / SKU filters and before the
+  // Return / sample-order exclusions — so every warehouse divides by the same
+  // number. A day nobody invoiced on never appears, so it never pads the divisor.
+  const invDates = new Set();
+  const invMonths = new Set();
   for (const r of invoice.rows){
     const d = parseDate(pick(r, aIv.date));
-    if (d) allDates.add(ymd(d));
+    if (!d) continue;
+    invDates.add(ymd(d));
+    invMonths.add(d.getFullYear() * 100 + d.getMonth());
   }
-  const uniqueDateDays = allDates.size || null;
-  const invDateDays = uniqueDateDays - pendDateDays;
-
-  const mtdMode = MTD_MODES.includes(state.mtdMode) ? state.mtdMode : "uniqueDates";
-  const modeDays = mtdMode === "plusPrior" ? altMtdDays
-                 : mtdMode === "maxDay"    ? autoMtdDays
-                 : uniqueDateDays;
+  const uniqueDateDays = invDates.size || null;
+  const modeDays = uniqueDateDays;
 
   const ovMtd = num($("#mtdDays").value) || null;
   const mtdDays = ovMtd || modeDays || 1;
@@ -658,10 +616,10 @@ function compute(){
 
   state.result = {
     warehouses, projDays, autoProjDays, ovProj, projMonthLabel: projKey ? `${MONTHS[projM][0].toUpperCase()+MONTHS[projM].slice(1)} ${projY}` : "—",
-    mtdDays, autoMtdDays, altMtdDays, priorDays, uniqueDateDays, pendDateDays, invDateDays,
-    mtdMode, monthsSpanned: monthsSeen.size, invMaxDate,
+    mtdDays, uniqueDateDays, invMonthsSpanned: invMonths.size, invMaxDate,
+    invDatesList: [...invDates].sort(),
     invReturns, invSamples, invOutOfMonth, zeroPend,
-    priorDatesList: [...priorDates].sort(), priorSkippedCount: priorSkipped.size, pivots: PV,
+    pivots: PV,
     dataRows: DR,
     groupKeys: [...PV.entries()].flatMap(([pivot, m]) =>
       [...m.entries()].flatMap(([key, a]) => [...a.skus].map(code => ({pivot, key, code})))),
@@ -683,7 +641,7 @@ function render(){
   renderKpis(r); renderWhTable(r); renderWhFilter(r); renderSkuTable(r); renderDiag(r); renderMtdSetting();
   $("#paramNote").textContent =
     `Basis: ${activeBases().map(b => BASIS_LABEL[b]).join(" · ")} · Projection divisor ${r.projDays} day(s) (${r.projMonthLabel}${r.ovProj?", manual override":""}) · ` +
-    `MTD divisor ${r.mtdDays} day(s) (${r.ovMtd ? "manual override" : r.mtdMode === "uniqueDates" ? `${r.uniqueDateDays} unique date(s) across Sales_Order_Date and Invoice Date` : r.mtdMode === "plusPrior" ? `max ${ymd(r.maxDate)} + ${r.priorDays} earlier-month day(s)` : `day-of-month of max ${ymd(r.maxDate)}`}) · ` +
+    `MTD divisor ${r.mtdDays} day(s) (${r.ovMtd ? "manual override" : `${r.uniqueDateDays} unique date(s) in Invoice Date`}) · ` +
     `${r.activeSkus} active CFA SKUs.`;
 }
 
@@ -804,9 +762,8 @@ function renderDiag(r){
 
 function renderMtdSetting(){
   const r = state.result;
-  $("#mtdMode").value = state.mtdMode;
-  const note = $("#mtdModeNote");
-  if (!r || !r.maxDate){ note.textContent = ""; $("#mtdDaysAuto").textContent = "auto"; return; }
+  const note = $("#divisorNote");
+  if (!r){ note.textContent = ""; $("#mtdDaysAuto").textContent = "auto"; return; }
 
   // An override must never be silently active: open the Advanced panel and badge
   // the heading whenever one is in force.
@@ -817,31 +774,23 @@ function renderMtdSetting(){
   const head = $("#view-upload .card-head h2");
   if (head) head.innerHTML = "Calculation settings" + (anyOv
     ? ` <span class="ovbadge">manual override in force</span>` : "");
-
-  const modeVal = {uniqueDates: r.uniqueDateDays, maxDay: r.autoMtdDays, plusPrior: r.altMtdDays};
-  $("#mtdDaysAuto").textContent = `auto: ${modeVal[r.mtdMode] ?? "—"}`;
-  const skipped = r.priorSkippedCount
-    ? ` ${r.priorSkippedCount} further earlier date(s) carry no CFA pendency or dispatch and were skipped.` : "";
+  $("#mtdDaysAuto").textContent = `auto: ${r.uniqueDateDays ?? "—"}`;
+  $("#mtdDivisorShown").textContent = r.mtdDays ?? "—";
 
   const lines = [
     r.ovMtd
-      ? `<b>In force: ${r.mtdDays} day(s) — manual override.</b> The rule above would give
-         ${modeVal[r.mtdMode] ?? "—"}; clear the override under Advanced to go back to it.`
-      : `<b>In force: ${r.mtdDays} day(s)</b> — ${MTD_MODE_LABEL[r.mtdMode]}.`,
-    `<code>Sales_Order_Date</code> holds <b>${r.uniqueDateDays}</b> unique date(s); the latest is ${ymd(r.maxDate)},
-     whose day-of-month is <b>${r.autoMtdDays}</b>${r.priorDays ? `, and ${r.priorDays} earlier-month date(s) carry CFA
-     pendency or dispatch, giving <b>${r.altMtdDays}</b> under the third rule` : ""}.${skipped}`
+      ? `<b>In force: ${r.mtdDays} day(s) — manual override.</b> The rule would give
+         ${r.uniqueDateDays ?? "—"}; clear the override under Advanced to go back to it.`
+      : `<b>In force: ${r.mtdDays} day(s)</b> — ${MTD_DIVISOR_LABEL}.`,
+    `<code>Invoice Date</code> holds <b>${r.uniqueDateDays ?? 0}</b> distinct date(s), counted over the whole
+     column before any filter${r.invMaxDate ? `; the latest is ${ymd(r.invMaxDate)}` : ""}. A day nobody
+     invoiced on never appears, so it never pads the divisor.`
   ];
-  if (r.uniqueDateDays && r.autoMtdDays && r.uniqueDateDays < r.autoMtdDays)
-    lines.push(`${r.autoMtdDays - r.uniqueDateDays} day(s) of the month carry no order at all — those are the days the
-      default rule leaves out of the divisor.`);
-  if (r.mtdMode === "plusPrior" && r.limitMonth)
-    lines.push(`<span style="color:var(--red);font-weight:600">Heads up:</span> “Limit dispatch rows to the month of the
-      max date” is on, so the kilos come from the latest month only while this divisor counts earlier days too.`);
-  if (r.mtdMode === "uniqueDates" && r.limitMonth && r.monthsSpanned > 1)
-    lines.push(`<span style="color:var(--red);font-weight:600">Heads up:</span> the file spans ${r.monthsSpanned} months
-      and the kilos are limited to the latest one, but this divisor counts unique dates across the whole column.
-      Untick the limit, or switch rule, to keep numerator and divisor over the same period.`);
+  if (r.invMonthsSpanned > 1 && r.limitMonth)
+    lines.push(`<span style="color:var(--red);font-weight:600">Heads up:</span> the invoice file spans
+      ${r.invMonthsSpanned} months and the kilos are limited to the latest one, but the divisor counts
+      distinct dates across the whole column. Untick the month limit to put numerator and divisor over
+      the same period.`);
   note.innerHTML = lines.join("<br>");
 }
 
@@ -925,25 +874,14 @@ MTD DRR    = (Pendency + Dispatched) ÷ ${md}</div>
      and on the Exclusions sheet. Where a warehouse has no surviving invoice row, Dispatched is <strong>nil</strong> and shows as
      “—”, not as a computed zero.</p>
 
-  <p>Three divisor rules are available; switching between them changes no other figure:</p>
-  <ol>
-    <li><strong>Unique dates across both flow files</strong> — <em>the default</em>. How many distinct dates appear in
-        <code>Sales_Order_Date</code> (pendency) or <code>Invoice Date</code> (invoice), counted over the whole columns before the
-        CFA / SKU filters, exactly as the max date is — so the divisor covers the same period as the kilos above the line. A day the
-        business took no order on never appears, so it never pads the divisor and never flatters the daily rate.</li>
-    <li><strong>Day-of-month of the maximum <code>Sales_Order_Date</code></strong> — days elapsed in the month, whether or not
-        each one carried an order. This is the rule worked through in the Condition tab.</li>
-    <li><strong>The max date's day plus one for every distinct earlier date that carries CFA pendency or dispatch.</strong> Days with no
-        orders in the latest month still count, because month-to-date means days elapsed. An earlier date earns its day only when at
-        least one row on it is CFA-mapped, is an active CFA SKU, and has <code>Pending Kgs</code> <em>or</em> <code>Stock_qty</code>
-        on it — so the date has to actually feed the numerator it will divide. A date belonging only to a non-CFA SKU or origin, or
-        carrying nothing in either column, adds nothing. A file confined to one month adds nothing either and lands back on rule 1.</li>
-  </ol>
-  ${r && r.maxDate ? `<p>On the loaded file: <strong>${r.uniqueDateDays}</strong> unique date(s) in the column (rule 1); max date
-    ${ymd(r.maxDate)} → <strong>${r.autoMtdDays}</strong> (rule 2); ${r.priorDays
-      ? `${r.priorDays} earlier date(s) carry CFA pendency or dispatch → <strong>${r.altMtdDays}</strong> (rule 3)`
-      : `no earlier date carries CFA pendency or dispatch, so rule 3 also gives <strong>${r.autoMtdDays}</strong>`}.
-    In force: <strong>${r.mtdDays}</strong> day(s) — ${r.ovMtd ? "manual override" : MTD_MODE_LABEL[r.mtdMode]}.</p>` : ""}
+  <p>The divisor is a single rule:</p>
+  <div class="formula">MTD divisor = count of distinct dates in the Invoice Date column</div>
+  <p>Counted over the <strong>whole column</strong> — before the CFA / SKU filters and before the Return and
+     sample-order exclusions — so every warehouse divides by the same number. A day nobody invoiced on never
+     appears in the column, so it never pads the divisor and never flatters the daily rate.
+     ${r ? `On the loaded file: <strong>${r.uniqueDateDays ?? 0}</strong> distinct date(s)${r.invMaxDate ? `, the latest ${ymd(r.invMaxDate)}` : ""}. In force: <strong>${r.mtdDays}</strong>${r.ovMtd ? " (manual override)" : ""}.` : ""}</p>
+  <p><code>Sales_Order_Date</code> no longer feeds the divisor. It keeps its other job: limiting pendency rows
+     to the month of the latest order, which is a row filter rather than a divisor rule.</p>
   <p>Dates arriving as text, as real dates and as Excel serials are all parsed. A date-only cell that a reader hands back as
      23:59:5x on the previous day is rounded to the day it actually represents, so no row drifts into the wrong month.</p>
 
@@ -1093,11 +1031,11 @@ async function exportExcel(){
     const projDaysF = (!r.ovProj && pm)
       ? `DAY(EOMONTH(DATE(${pm[2]},${MONTHS.indexOf(pm[1].toLowerCase()) + 1},1),0))`
       : `${r.projDays}`;
-    const dateR = DPR(dpCol.date);
+    // Distinct dates in Invoice Date. The expression scans the whole column, so it is
+    // evaluated in ONE cell and every per-row divisor references that cell.
+    const dateR = IVR(ivCol.date);
     const mtdDaysF = r.ovMtd ? `${r.mtdDays}`
-      : r.mtdMode === "uniqueDates" ? `SUMPRODUCT((${dateR}<>"")/COUNTIF(${dateR},${dateR}&""))`
-      : r.mtdMode === "maxDay"      ? `DAY(MAX(${dateR}))`
-      : `${r.mtdDays}`;
+      : `SUMPRODUCT((${dateR}<>"")/COUNTIF(${dateR},${dateR}&""))`;
 
     /* ── Sheet 1: warehouse summary, live formulas ── */
     const ws = wb.addWorksheet("Warehouse DOH", {views:[{state:"frozen", xSplit:1, ySplit:5}]});
@@ -1111,7 +1049,7 @@ async function exportExcel(){
     // From here on every row's divisor REFERENCES these two cells rather than
     // repeating the expression — the unique-date count is a whole-column scan.
     const projDaysRef = "'Warehouse DOH'!$E$3", mtdDaysRef = "'Warehouse DOH'!$I$3";
-    ws.getCell("J3").value = `(${r.ovMtd ? "manual override" : MTD_MODE_LABEL[r.mtdMode]})`;
+    ws.getCell("J3").value = `(${r.ovMtd ? "manual override" : MTD_DIVISOR_LABEL})`;
     ws.getCell("L3").value = "Generated";             ws.getCell("M3").value = r.generatedAt.toLocaleString("en-IN");
     ["A3","D3","H3","L3"].forEach(c => ws.getCell(c).font = {bold:true, size:10});
     ["B3","E3","I3","M3"].forEach(c => ws.getCell(c).font = {bold:true, size:10, color:{argb:BRAND}});
@@ -1271,13 +1209,6 @@ async function exportExcel(){
     sec("Condition 5 — projection DRR");
     kv("Formula", "Projection DRR = Σ Total KGs (grouped by normalised Wareouse) ÷ days in projection month", true);
     kv("Excel cell", "Warehouse DOH!G = IFERROR(E/F, 0)  →  Projection Kgs ÷ Projection Days", true);
-    kv("Divisor used", `${r.mtdDays} day(s) — ${r.ovMtd ? "manual override" : MTD_MODE_LABEL[r.mtdMode]}.
-` +
-      `Unique dates in the column: ${r.uniqueDateDays}. Max Sales_Order_Date ${r.maxDate ? ymd(r.maxDate) : "n/a"} ` +
-      `gives day-of-month ${r.autoMtdDays}` +
-      (r.priorDays ? `, plus ${r.priorDays} earlier-month date(s) carrying CFA movement = ${r.altMtdDays}.` : ".") +
-      `
-The cell is a live formula where the rule can be expressed over the Dispatch data sheet, so it re-computes in Excel.`);
     gap();
 
     sec("Condition 6 — pendency + dispatch MTD DRR");
@@ -1289,23 +1220,9 @@ The cell is a live formula where the rule can be expressed over the Dispatch dat
     kv("Invoice exclusions", `Dropped before summing: Invoice Status = Return (${r.invReturns} row(s)); Customer containing "sample order" (${r.invSamples} row(s)); From Warehouse not mapped to a CFA. Each drop is listed on the Exclusions sheet with its reason.`);
     kv("Nil vs zero", "Where a warehouse (or SKU) has no surviving invoice row at all, the Dispatched cell is left EMPTY — nil, not a computed zero. Column J still adds correctly across an empty cell.");
     kv("Excel cells", "Warehouse DOH!J = H+I  (Pend + Disp)\nWarehouse DOH!L = IFERROR(J/K, 0)  (÷ MTD Days)", true);
-    kv("Divisor rule", [
-      "1. unique dates across Sales_Order_Date and Invoice Date       <- default",
-      "   (a day nobody traded on never appears, so it never pads the divisor)",
-      "2. day-of-month of MAX(Sales_Order_Date) — days elapsed, traded or not",
-      "3. that day + one per distinct earlier date carrying CFA pendency",
-      "   (an earlier date counts only if some row on it is CFA-mapped, is an",
-      "    active CFA SKU, and has Pending Kgs — it must feed the numerator)",
-      "A single-month file gives the same answer under rules 2 and 3."].join(String.fromCharCode(10)), true);
-    kv("Divisor used", `${r.mtdDays} day(s)${r.maxDate ? ` — max Sales_Order_Date ${ymd(r.maxDate)} gives ${r.autoMtdDays}` : ""}` +
-      (r.priorDays ? `; ${r.priorDays} earlier date(s) carry CFA pendency or dispatch (${r.priorDatesList.join(", ")}) so rule 2 gives ${r.altMtdDays}${r.priorSkippedCount ? `, with ${r.priorSkippedCount} earlier date(s) skipped for carrying none` : ""}`
-                   : (r.monthsSpanned > 1 ? "; earlier months are present but none carries CFA pendency, so both rules agree"
-                                          : "; the file holds one month only, so both rules agree")) +
-      `. In force: ${r.ovMtd ? "manual override" : r.mtdMode === "plusPrior" ? "rule 2" : "rule 1"}.`);
-    kv("Row scope", r.limitMonth
-      ? `Dispatch rows are limited to the month of the max date; ${fmt0(r.outOfMonth)} row(s) fell outside and were excluded.`
-      : "All dispatch rows are included regardless of month.");
-    kv("Dates", "Sales_Order_Date and Invoice Date are parsed from text, real dates and Excel serials alike. A date-only cell that a reader hands back as 23:59:5x on the previous day is rounded to the day it represents, so no row drifts into the wrong month.");
+    kv("Divisor rule", "MTD divisor = count of distinct dates in the Invoice Date column, taken over the whole column before the CFA / SKU filters and before the Return and sample-order exclusions, so every warehouse divides by the same number.");
+    kv("Divisor used", `${r.mtdDays} day(s) — ${r.ovMtd ? "manual override" : MTD_DIVISOR_LABEL}. Invoice Date holds ${r.uniqueDateDays ?? 0} distinct date(s)${r.invMaxDate ? `, the latest ${ymd(r.invMaxDate)}` : ""}.`);
+    kv("Excel cell", "Warehouse DOH!I3 = SUMPRODUCT((Invoice Date range<>\"\")/COUNTIF(same range, same range&\"\")) — evaluated once; every per-row divisor references that cell, so editing it re-drives the workbook.", true);
     gap();
 
     sec("Condition 7 — final DRR");
@@ -1535,7 +1452,7 @@ function showView(v){
 
 function init(){
   loadMasters();
-  $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber; $("#mtdMode").value = state.mtdMode;
+  $("#thRed").value = state.thRed; $("#thAmber").value = state.thAmber;
   syncBasisToggle();
   renderFileTable(); renderSkuMaster(); renderWhMaster(); vizInit(); renderViz();
 
@@ -1599,7 +1516,6 @@ function init(){
     $("#projDays").value = ""; $("#mtdDays").value = "";
     compute(); toast("Overrides cleared — both divisors back on their rules");
   });
-  $("#mtdMode").addEventListener("change", e => { state.mtdMode = e.target.value; saveMasters(); compute(); });
   $("#limitMonth").addEventListener("change", compute);
 
   /* drilldown filters */

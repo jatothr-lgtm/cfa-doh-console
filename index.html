@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CFA DOH Console</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=2">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 </head>
@@ -129,13 +129,9 @@
   <div class="card">
     <div class="card-head"><h2>Calculation settings</h2></div>
     <div class="settings">
-      <label>MTD divisor rule
-        <select id="mtdMode">
-          <option value="uniqueDates">Unique dates across both flow files</option>
-          <option value="maxDay">Day-of-month of the max Sales_Order_Date</option>
-          <option value="plusPrior">Max date's day + unique dates in earlier months</option>
-        </select>
-        <small id="mtdModeAuto">&nbsp;</small>
+      <label>MTD divisor
+        <output id="mtdDivisorShown" class="readout">—</output>
+        <small>days — distinct dates in <code>Invoice Date</code></small>
       </label>
       <label>Projection divisor
         <output id="projDaysShown" class="readout">—</output>
@@ -143,7 +139,7 @@
       </label>
       <label class="chk"><input type="checkbox" id="limitMonth" checked> Limit dispatch rows to the month of the max date</label>
     </div>
-    <p class="note" id="mtdModeNote"></p>
+    <p class="note" id="divisorNote"></p>
 
     <details class="advanced" id="advanced">
       <summary>Advanced — replace a divisor by hand</summary>
@@ -330,7 +326,7 @@
 <div class="toast" id="toast" hidden></div>
 <input type="file" id="csvPicker" accept=".csv" hidden>
 
-<script src="viz.js"></script>
-<script src="app.js"></script>
+<script src="viz.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
