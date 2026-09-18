@@ -149,7 +149,8 @@ let state = {
   skus: null, wh: null,
   bases: ["both"], vizBasis: "both", thRed: 15, thAmber: 30,
   files: {inhand:null, projection:null, pendency:null, invoice:null},
-  result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL"
+  result: null, skuFilterWh: "ALL", skuQuery: "", vizWh: "ALL",
+  whSort: null, skuSort: null   // {i, dir} — presentation only
 };
 
 function loadMasters(){
@@ -665,41 +666,76 @@ function renderKpis(r){
 }
 
 const WH_COLS_BASE = [
-  ["Warehouse", w => esc(w.cfa), "left"],
-  ["In Transit + FG", w => fmt(w.both)],
-  ["FG", w => fmt(w.fg)],
-  ["In Transit", w => fmt(w.it)],
-  ["Projection Kgs", w => fmt(w.projKgs)],
-  ["Projection DRR", w => fmt(w.projDRR)],
-  ["Pending Kgs", w => fmt(w.pend)],
-  ["Dispatched Kgs", w => w.dispNil ? "—" : fmt(w.disp)],
-  ["Pend + Disp", w => fmt(w.pdSum)],
-  ["MTD DRR", w => fmt(w.mtdDRR)],
-  ["Final DRR", w => `<b>${fmt(w.finalDRR)}</b>`],
-  ["DRR source", w => `<span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span>`]
+  /* label, cell renderer, align, sort value — sorting reads the raw number, never
+     the formatted text, so "1,158.37" and "—" order correctly. */
+  ["Warehouse", w => esc(w.cfa), "left", w => w.cfa],
+  ["In Transit + FG", w => fmt(w.both), "", w => w.both],
+  ["FG", w => fmt(w.fg), "", w => w.fg],
+  ["In Transit", w => fmt(w.it), "", w => w.it],
+  ["Projection Kgs", w => fmt(w.projKgs), "", w => w.projKgs],
+  ["Projection DRR", w => fmt(w.projDRR), "", w => w.projDRR],
+  ["Pending Kgs", w => fmt(w.pend), "", w => w.pend],
+  ["Dispatched Kgs", w => w.dispNil ? "—" : fmt(w.disp), "", w => w.dispNil ? null : w.disp],
+  ["Pend + Disp", w => fmt(w.pdSum), "", w => w.pdSum],
+  ["MTD DRR", w => fmt(w.mtdDRR), "", w => w.mtdDRR],
+  ["Final DRR", w => `<b>${fmt(w.finalDRR)}</b>`, "", w => w.finalDRR],
+  ["DRR source", w => `<span class="tag ${w.drrSrc==='Projection'?'proj':'mtd'}">${esc(w.drrSrc)}</span>`, "", w => w.drrSrc]
 ];
 /* one DOH column per selected basis; the single-basis case keeps its stock column */
 function whCols(){
   const bases = activeBases(), cols = WH_COLS_BASE.slice();
   if (bases.length === 1){
     const b = bases[0];
-    cols.push(["Selected stock", w => fmt(selOf(w, b))]);
-    cols.push(["DOH", w => { const d = dohOf(w, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; }]);
+    cols.push(["Selected stock", w => fmt(selOf(w, b)), "", w => selOf(w, b)]);
+    cols.push(["DOH", w => { const d = dohOf(w, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; }, "", w => dohOf(w, b)]);
   } else {
     bases.forEach(b => cols.push([`DOH · ${BASIS_LABEL[b]}`,
-      w => { const d = dohOf(w, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; }]));
+      w => { const d = dohOf(w, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; },
+      "", w => dohOf(w, b)]));
   }
   return cols;
 }
 
-function renderWhTable(r){
-  const COLS = whCols();
-  const head = `<thead><tr>${COLS.map(c => `<th${c[2]?' style="text-align:left"':''}>${c[0]}</th>`).join("")}</tr></thead>`;
-  const body = `<tbody>${r.warehouses.map(w =>
-    `<tr>${COLS.map(c => `<td${c[2]?' style="text-align:left"':''}>${c[1](w)}</td>`).join("")}</tr>`).join("")}</tbody>`;
-  $("#whTable").innerHTML = head + body;
+
+/* ── column sorting (presentation only — no figure is recomputed) ──────────
+   A blank or nil cell always sinks to the bottom whichever way the column is
+   sorted, so "—" never masquerades as the smallest number. */
+function cmpVals(a, b, dir){
+  const aNil = a == null || a === "" || (typeof a === "number" && !Number.isFinite(a));
+  const bNil = b == null || b === "" || (typeof b === "number" && !Number.isFinite(b));
+  if (aNil && bNil) return 0;
+  if (aNil) return 1;
+  if (bNil) return -1;
+  const d = typeof a === "number" && typeof b === "number"
+    ? a - b
+    : String(a).localeCompare(String(b), undefined, {numeric:true, sensitivity:"base"});
+  return dir === "desc" ? -d : d;
+}
+function sortRows(rows, cols, sort){
+  if (!sort || sort.i == null) return rows;
+  const get = cols[sort.i] && cols[sort.i][3];
+  if (!get) return rows;
+  return rows.slice().sort((x, y) => cmpVals(get(x), get(y), sort.dir));
+}
+/* a header that says what it does and what it is currently doing */
+function sortableHead(cols, sort, table){
+  return `<thead><tr>${cols.map((c, i) => {
+    const on = sort && sort.i === i;
+    const dir = on ? sort.dir : null;
+    return `<th class="sortable${on ? " is-sorted" : ""}" data-sort-table="${table}" data-sort-i="${i}"
+      aria-sort="${on ? (dir === "asc" ? "ascending" : "descending") : "none"}"
+      title="Sort by ${esc(c[0])}"${c[2] ? ' style="text-align:left"' : ""}>${esc(c[0])}<i class="sarrow">${
+      on ? (dir === "asc" ? "▲" : "▼") : "↕"}</i></th>`;
+  }).join("")}</tr></thead>`;
 }
 
+function renderWhTable(r){
+  const COLS = whCols();
+  const rows = sortRows(r.warehouses, COLS, state.whSort);
+  const body = `<tbody>${rows.map(w =>
+    `<tr>${COLS.map(c => `<td${c[2]?' style="text-align:left"':''}>${c[1](w)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("#whTable").innerHTML = sortableHead(COLS, state.whSort, "wh") + body;
+}
 function renderWhFilter(r){
   const sel = $("#whFilter");
   const cur = state.skuFilterWh;
@@ -709,32 +745,56 @@ function renderWhFilter(r){
   state.skuFilterWh = sel.value;
 }
 
+function skuCols(){
+  const bases = activeBases();
+  /* label, cell renderer, sort value */
+  const cols = [
+    ["Item Code", s => esc(s.code), s => s.code, "left"],
+    ["Item Name", s => `<span class="name">${esc(s.name)}</span>`, s => s.name, "left"],
+    ["IT + FG", s => fmt(s.both), s => s.both],
+    ["FG", s => fmt(s.fg), s => s.fg],
+    ["In Transit", s => fmt(s.it), s => s.it],
+    ["Proj Kgs", s => fmt(s.projKgs), s => s.projKgs],
+    ["Proj DRR", s => fmt(s.projDRR), s => s.projDRR],
+    ["Pending", s => fmt(s.pend), s => s.pend],
+    ["Dispatched", s => s.dispNil ? "—" : fmt(s.disp), s => s.dispNil ? null : s.disp],
+    ["Pend + Disp", s => fmt(s.pdSum), s => s.pdSum],
+    ["MTD DRR", s => fmt(s.mtdDRR), s => s.mtdDRR],
+    ["Final DRR", s => `<b>${fmt(s.finalDRR)}</b>`, s => s.finalDRR],
+  ];
+  if (bases.length === 1){
+    const b = bases[0];
+    cols.push(["Selected", s => fmt(selOf(s, b)), s => selOf(s, b)]);
+    cols.push(["DOH", s => { const d = dohOf(s, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; }, s => dohOf(s, b)]);
+  } else {
+    bases.forEach(b => cols.push([`DOH · ${BASIS_LABEL[b]}`,
+      s => { const d = dohOf(s, b); return `<span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span>`; },
+      s => dohOf(s, b)]));
+  }
+  return cols;
+}
+
 function renderSkuTable(r){
   const q = norm(state.skuQuery);
-  const bases = activeBases();
-  const cols = ["Item Code","Item Name","IT + FG","FG","In Transit","Proj Kgs","Proj DRR","Pending","Dispatched","Pend + Disp","MTD DRR","Final DRR"]
-    .concat(bases.length === 1 ? ["Selected","DOH"] : bases.map(b => `DOH · ${BASIS_LABEL[b]}`));
-  let html = `<thead><tr>${cols.map((c,i) => `<th${i<2?' style="text-align:left"':''}>${c}</th>`).join("")}</tr></thead><tbody>`;
+  const COLS = skuCols();
+  /* sortRows() reads the accessor at index 3; here it sits at index 2, so hand it
+     a shape it understands rather than duplicating the comparator. */
+  const forSort = COLS.map(c => [c[0], c[1], c[3] || "", c[2]]);
+  let html = sortableHead(forSort, state.skuSort, "sku") + "<tbody>";
   let n = 0;
   for (const w of r.warehouses){
     if (state.skuFilterWh !== "ALL" && w.cfa !== state.skuFilterWh) continue;
-    const rows = w.skuRows.filter(s => !q || norm(s.code).includes(q) || norm(s.name).includes(q));
+    let rows = w.skuRows.filter(s => !q || norm(s.code).includes(q) || norm(s.name).includes(q));
     if (!rows.length) continue;
-    html += `<tr><td class="grp" colspan="${cols.length}">${esc(w.cfa)} — ${rows.length} SKU(s)</td></tr>`;
+    /* sorting stays INSIDE each warehouse block, so the grouping never breaks */
+    rows = sortRows(rows, forSort, state.skuSort);
+    html += `<tr><td class="grp" colspan="${COLS.length}">${esc(w.cfa)} — ${rows.length} SKU(s)</td></tr>`;
     for (const s of rows){
       n++;
-      html += `<tr>
-        <td>${esc(s.code)}</td><td class="name">${esc(s.name)}</td>
-        <td>${fmt(s.both)}</td><td>${fmt(s.fg)}</td><td>${fmt(s.it)}</td>
-        <td>${fmt(s.projKgs)}</td><td>${fmt(s.projDRR)}</td>
-        <td>${fmt(s.pend)}</td><td>${s.dispNil ? "—" : fmt(s.disp)}</td><td>${fmt(s.pdSum)}</td><td>${fmt(s.mtdDRR)}</td>
-        <td><b>${fmt(s.finalDRR)}</b></td>
-        ${bases.length === 1 ? `<td>${fmt(selOf(s, bases[0]))}</td>` : ""}
-        ${bases.map(b => { const d = dohOf(s, b);
-          return `<td><span class="doh ${bandOf(d)}">${d==null?"—":fmt(d,1)}</span></td>`; }).join("")}</tr>`;
+      html += `<tr>${COLS.map(c => `<td${c[3] ? ` class="${c[3] === "left" ? "name" : ""}" style="text-align:left"` : ""}>${c[1](s)}</td>`).join("")}</tr>`;
     }
   }
-  if (!n) html += `<tr><td colspan="${cols.length}" style="text-align:center;color:var(--ink-3);padding:24px">No matching SKUs</td></tr>`;
+  if (!n) html += `<tr><td colspan="${COLS.length}" style="text-align:center;color:var(--ink-3);padding:24px">No matching SKUs</td></tr>`;
   $("#skuTable").innerHTML = html + "</tbody>";
 }
 
@@ -1510,6 +1570,18 @@ function init(){
   $("#limitMonth").addEventListener("change", compute);
 
   /* drilldown filters */
+  /* sorting: first click sorts, second flips, third clears back to the natural
+     order. Nothing is recomputed — the same rows are simply re-ordered. */
+  $("#results").addEventListener("click", e => {
+    const th = e.target.closest("th[data-sort-table]");
+    if (!th || !state.result) return;
+    const which = th.dataset.sortTable === "wh" ? "whSort" : "skuSort";
+    const i = +th.dataset.sortI, cur = state[which];
+    state[which] = !cur || cur.i !== i ? {i, dir:"asc"}
+                 : cur.dir === "asc"   ? {i, dir:"desc"}
+                 : null;
+    if (which === "whSort") renderWhTable(state.result); else renderSkuTable(state.result);
+  });
   $("#whFilter").addEventListener("change", e => { state.skuFilterWh = e.target.value; renderSkuTable(state.result); });
   $("#skuSearch").addEventListener("input", e => { state.skuQuery = e.target.value; renderSkuTable(state.result); });
 

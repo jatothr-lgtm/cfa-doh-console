@@ -361,3 +361,12 @@ table.grid{border-collapse:separate; border-spacing:0; width:100%; font-variant-
   margin:10px 0 0; font-size:11.5px; color:var(--ink-3); line-height:1.5;
   display:flex; flex-direction:column; align-items:center; gap:6px;
 }
+
+/* ── sortable column headers ── */
+.grid th.sortable{cursor:pointer; user-select:none; white-space:nowrap}
+.grid th.sortable:hover{color:var(--ink); background:var(--line-2)}
+.grid th.sortable:focus-visible{outline:2px solid var(--brand); outline-offset:-2px}
+.grid th.is-sorted{color:var(--brand)}
+.sarrow{font-style:normal; font-size:9px; margin-left:5px; opacity:.4}
+.grid th.is-sorted .sarrow{opacity:1}
+.grid th.sortable:hover .sarrow{opacity:.8}

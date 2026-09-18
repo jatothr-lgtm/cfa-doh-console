@@ -45,6 +45,12 @@ git config user.email "jatoth.r@farmley.com"
    plots one number per mark, so it picks one.
 5. **Export Excel** → a workbook where every derived number is a live formula.
 
+**Sorting.** Every column on the warehouse summary and the SKU drilldown is sortable: click a header
+to sort ascending, again for descending, a third time to clear back to the natural order. Blank and
+nil cells ("—") always sink to the bottom whichever direction is chosen, so a missing figure never
+poses as the smallest number. On the drilldown the sort applies **inside each warehouse block**, so
+the grouping is never broken. Sorting is presentation only — no figure is recomputed.
+
 ## Calculation (Conditions 4–8)
 
 ```
