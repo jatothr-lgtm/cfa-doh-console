@@ -749,8 +749,8 @@ function skuCols(){
   const bases = activeBases();
   /* label, cell renderer, sort value */
   const cols = [
-    ["Item Code", s => esc(s.code), s => s.code, "left"],
     ["Item Name", s => `<span class="name">${esc(s.name)}</span>`, s => s.name, "left"],
+    ["Item Code", s => esc(s.code), s => s.code, "left"],
     ["IT + FG", s => fmt(s.both), s => s.both],
     ["FG", s => fmt(s.fg), s => s.fg],
     ["In Transit", s => fmt(s.it), s => s.it],
@@ -1180,12 +1180,12 @@ async function exportExcel(){
     /* ── Sheet 2: SKU drilldown, live formulas ── */
     const ds = wb.addWorksheet("SKU Drilldown", {views:[{state:"frozen", ySplit:1}]});
     const dStock = {both:"D", fg:"E", it:"F"};
-    const DHEAD = ["Warehouse","Item Code","Item Name","In Transit + FG","FG","In Transit","Projection Kgs","Projection Days",
+    const DHEAD = ["Warehouse","Item Name","Item Code","In Transit + FG","FG","In Transit","Projection Kgs","Projection Days",
                    "Projection DRR","Pending Kgs","Dispatched Kgs","Pend + Disp","MTD Days","MTD DRR","Final DRR","DRR Source"].concat(
                    bases.length === 1 ? ["Selected Stock","DOH (days)"]
                                       : bases.map(b => `DOH (days) — ${BASIS_LABEL[b]}`));
     ds.getRow(1).values = DHEAD; headerRow(ds, 1);
-    ds.columns = [{width:14},{width:24},{width:52},{width:15},{width:12},{width:12},{width:14},{width:13},{width:14},
+    ds.columns = [{width:14},{width:52},{width:24},{width:15},{width:12},{width:12},{width:14},{width:13},{width:14},
                   {width:13},{width:14},{width:13},{width:11},{width:12},{width:12},{width:12}].concat(
                   bases.length === 1 ? [{width:14},{width:12}] : bases.map(() => ({width:22})));
     ds.autoFilter = `A1:${COL(15 + (bases.length === 1 ? 2 : bases.length))}1`;
@@ -1193,9 +1193,9 @@ async function exportExcel(){
     let dr = 2;
     for (const w of r.warehouses) for (const s of w.skuRows){
       const x = dr;
-      ds.getRow(x).values = [w.cfa, s.code, s.name, null, null, null, null, null, null, null, null, null, null, null, null, null];
+      ds.getRow(x).values = [w.cfa, s.name, s.code, null, null, null, null, null, null, null, null, null, null, null, null, null];
       const key = c => [[c, `$A${x}`]];
-      const keyCode = (c, cc) => [[c, `$A${x}`], [cc, `$B${x}`]];
+      const keyCode = (c, cc) => [[c, `$A${x}`], [cc, `$C${x}`]];   // C = Item Code
       ds.getCell(`E${x}`).value = {formula:fFG(x, keyCode(IHR(ihCol.cfa), IHR(ihCol.code)))};
       ds.getCell(`F${x}`).value = {formula:fIT(x, keyCode(IHR(ihCol.cfa), IHR(ihCol.code)))};
       ds.getCell(`D${x}`).value = {formula:`E${x}+F${x}`};
